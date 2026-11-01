@@ -3096,6 +3096,116 @@ jobs:
           }
           DART_LIB_MAIN_DART
 
+          cat > ios/Runner/NativeLanDiscoveryPlugin.swift <<'DART_IOS_RUNNER_NATIVELANDISCOVERYPLUGIN_SWIFT'
+          import Flutter
+          import UIKit
+
+          /// 公开快照没有包含这个插件，这里给出一个空实现，
+          /// 只保证 `AppDelegate` 里的注册调用可以编译通过。
+          /// 局域网发现在当前构建里不可用，调用会返回明确错误。
+          final class NativeLanDiscoveryPlugin: NSObject, FlutterPlugin {
+            static func register(with registrar: FlutterPluginRegistrar) {
+              let channel = FlutterMethodChannel(
+                name: "org.mewx.wenku8/lan_discovery", binaryMessenger: registrar.messenger())
+              registrar.addMethodCallDelegate(NativeLanDiscoveryPlugin(), channel: channel)
+            }
+
+            func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+              result(FlutterError(code: "unavailable", message: "当前构建不支持局域网发现", details: nil))
+            }
+          }
+          DART_IOS_RUNNER_NATIVELANDISCOVERYPLUGIN_SWIFT
+
+          cat > ios/Runner/BookFolderScanner.swift <<'DART_IOS_RUNNER_BOOKFOLDERSCANNER_SWIFT'
+          import Foundation
+
+          /// 公开快照缺少文件夹扫描的原生实现。这里提供一个保守版本：
+          /// 配置类调用是空操作，扫描返回空结果，暂存/链接直接报错。
+          /// Dart 侧对 `scanFolderInfo == nil` 和空 `books` 都有处理，因此不会崩。
+          final class BookFolderScanner {
+            init(stateFile: URL, documentsDirectory: URL) throws {
+              self.stateFile = stateFile
+              self.documentsDirectory = documentsDirectory
+            }
+
+            private let stateFile: URL
+            private let documentsDirectory: URL
+
+            func info() throws -> Any? {
+              return nil
+            }
+
+            func select(_ url: URL) throws -> Any? {
+              return nil
+            }
+
+            func selectApplicationDocuments() throws -> Any? {
+              return nil
+            }
+
+            func formats() throws -> Any? {
+              return nil
+            }
+
+            func setFormats(_ extensions: [String]) throws {}
+
+            func setAutomatic(_ value: Bool) throws {}
+
+            func disconnect() throws {}
+
+            func scan() throws -> Any? {
+              return ["books": [Any](), "total": 0, "unchanged": 0, "warnings": [String]()]
+            }
+
+            func stage(_ token: String, documents: ManagedBookDocuments) throws -> Any? {
+              throw BookDocumentFailure(code: "scan_unavailable", message: "当前构建不支持文件夹扫描导入")
+            }
+
+            func link(_ token: String, documents: LinkedBookDocuments) throws -> Any? {
+              throw BookDocumentFailure(code: "scan_unavailable", message: "当前构建不支持文件夹扫描导入")
+            }
+
+            func markImported(_ token: String) throws {}
+
+            func finish() throws {}
+          }
+          DART_IOS_RUNNER_BOOKFOLDERSCANNER_SWIFT
+
+          cat > ios/Runner/NativeBookConversion.swift <<'DART_IOS_RUNNER_NATIVEBOOKCONVERSION_SWIFT'
+          import Foundation
+
+          /// 公开快照缺少 Kindle / PDF 转换的原生实现。
+          /// 这两个能力依赖未公开的模块，这里统一给出可读的错误，
+          /// Dart 侧会捕获并提示「当前构建不支持该格式」。
+          final class NativeBookConversion {
+            init(documents: ManagedBookDocuments, portableRoot: URL) throws {
+              self.documents = documents
+              self.portableRoot = portableRoot
+            }
+
+            private let documents: ManagedBookDocuments
+            private let portableRoot: URL
+
+            func extractKindle(_ path: String, output: String) throws -> Int {
+              throw BookDocumentFailure(code: "format_unavailable", message: "当前构建不支持 MOBI / AZW3 转换，请先转换为 EPUB")
+            }
+
+            func extractPdf(_ path: String, output: String, name: String) throws {
+              throw BookDocumentFailure(code: "format_unavailable", message: "当前构建不支持 PDF 导入，请先转换为 EPUB")
+            }
+          }
+          DART_IOS_RUNNER_NATIVEBOOKCONVERSION_SWIFT
+
+          cat > ios/Runner/NativePdfImport.swift <<'DART_IOS_RUNNER_NATIVEPDFIMPORT_SWIFT'
+          import Foundation
+
+          /// 工程文件里引用了这个文件，但公开快照没有包含它，也没有任何调用方。
+          /// 保留一个空类型即可满足 Xcode 的 Sources 编译单元。
+          final class NativePdfImport {
+            private init() {}
+          }
+          DART_IOS_RUNNER_NATIVEPDFIMPORT_SWIFT
+
       - name: Fill missing assets
         run: |
           set -euo pipefail
