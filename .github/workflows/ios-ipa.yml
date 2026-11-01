@@ -1,0 +1,3145 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: Marketing version; empty keeps pubspec value
+        required: false
+        default: ''
+      build_number:
+        description: Build number; empty keeps pubspec value
+        required: false
+        default: ''
+      strip_app_groups:
+        description: Remove App Groups entitlements (needed for free Apple IDs)
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Toolchain versions
+        run: |
+          flutter --version
+          xcodebuild -version
+          pod --version
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Apply reconstructed modules
+        run: |
+          set -euo pipefail
+          cat > lib/lan_handoff_widgets.dart <<'DART_LIB_LAN_HANDOFF_WIDGETS_DART'
+          import 'package:flutter/widgets.dart';
+
+          import 'lan_reading_sync.dart';
+
+          /// Wraps the app so nearby receipts can interrupt the current screen.
+          ///
+          /// Nearby reading is unavailable in this build, so the monitor is a pass-through
+          /// that never shows a notice.
+          class LanHandoffMonitor extends StatefulWidget {
+            const LanHandoffMonitor({
+              super.key,
+              required this.handoff,
+              required this.onContinue,
+              required this.reduceMotion,
+              required this.noticeWrapper,
+              required this.child,
+            });
+
+            final LanHandoff? handoff;
+            final Future<void> Function(LanHandoffReceipt receipt) onContinue;
+            final bool reduceMotion;
+            final Widget Function(Widget notice) noticeWrapper;
+            final Widget child;
+
+            @override
+            State<LanHandoffMonitor> createState() => _LanHandoffMonitorState();
+          }
+
+          class _LanHandoffMonitorState extends State<LanHandoffMonitor> {
+            @override
+            Widget build(BuildContext context) => widget.child;
+          }
+          DART_LIB_LAN_HANDOFF_WIDGETS_DART
+
+          cat > lib/lan_reading_page.dart <<'DART_LIB_LAN_READING_PAGE_DART'
+          import 'package:flutter/material.dart';
+
+          import 'catalog.dart';
+          import 'lan_reading_sync.dart';
+          import 'library_state.dart';
+
+          /// Placeholder for the nearby-reading screen: the LAN feature is not part of
+          /// this build, and this page is unreachable while [LanSyncScope.maybeOf]
+          /// returns `null`.
+          class LanReadingPage extends StatelessWidget {
+            const LanReadingPage({
+              super.key,
+              required this.sync,
+              required this.reduceMotion,
+            });
+
+            final LanReadingSync sync;
+            final bool reduceMotion;
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('局域网续读')),
+                body: const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('当前版本未包含局域网续读功能。'),
+                ),
+              );
+            }
+          }
+
+          /// Placeholder sheet for sending the current book to a nearby device.
+          class LanSendBookSheet extends StatelessWidget {
+            const LanSendBookSheet({
+              super.key,
+              required this.sync,
+              required this.book,
+              required this.position,
+              required this.reduceMotion,
+            });
+
+            final LanReadingSync sync;
+            final Novel book;
+            final ReadingPosition position;
+            final bool reduceMotion;
+
+            @override
+            Widget build(BuildContext context) {
+              return const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('当前版本未包含局域网续读功能。'),
+              );
+            }
+          }
+          DART_LIB_LAN_READING_PAGE_DART
+
+          cat > lib/lan_reading_sync.dart <<'DART_LIB_LAN_READING_SYNC_DART'
+          import 'package:flutter/widgets.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          import 'catalog.dart';
+          import 'library_state.dart';
+
+          /// A nearby-handoff token sent from another device.
+          ///
+          /// The reference snapshot did not include the original LAN reading
+          /// implementation, so this build keeps the type surface but leaves the feature
+          /// dormant: [LanReadingSync.handoff] is always `null`.
+          class LanHandoffReceipt {
+            const LanHandoffReceipt({this.online});
+
+            /// Identifier of the online book this receipt belongs to, when the sender was
+            /// reading an online novel instead of a local file.
+            final String? online;
+
+            @override
+            bool operator ==(Object other) =>
+                other is LanHandoffReceipt && other.online == online;
+
+            @override
+            int get hashCode => online.hashCode;
+          }
+
+          /// A resolved receipt: which book, and where to continue reading.
+          typedef LanHandoffTarget = ({Novel book, ReadingPosition position});
+
+          /// Receives receipts from nearby devices.
+          abstract class LanHandoff {
+            /// Most recent receipt waiting for the user's confirmation, if any.
+            LanHandoffReceipt? get received;
+
+            /// Resolves [receipt] into a concrete book and position.
+            Future<LanHandoffTarget> resolveReceipt(LanHandoffReceipt receipt);
+
+            /// Dismisses the pending receipt without continuing.
+            void dismissReceipt();
+          }
+
+          /// Coordinates nearby "continue reading on this device" handoffs.
+          ///
+          /// Only the plumbing the rest of the app talks to is implemented here; the
+          /// networking layer is unavailable in this build, so [handoff] stays `null` and
+          /// every call site degrades to its non-LAN behaviour.
+          class LanReadingSync {
+            LanReadingSync({
+              required LibraryState state,
+              required SharedPreferences preferences,
+              required Object? books,
+              required Object? repository,
+            }) : _books = books,
+                 _repository = repository;
+
+            final Object? _books;
+            final Object? _repository;
+
+            /// Local book store handed in by the app shell (`null` when unavailable).
+            Object? get books => _books;
+
+            /// Repository handed in by the app shell (`null` when unavailable).
+            Object? get repository => _repository;
+
+            /// Always `null`: nearby reading is not part of this build.
+            LanHandoff? get handoff => null;
+
+            Future<void> initialize() async {}
+
+            void dispose() {}
+          }
+
+          /// Exposes [LanReadingSync] to the widget tree.
+          ///
+          /// [maybeOf] returns `null` while nearby reading is unavailable, which hides the
+          /// settings entry and the reader handoff action.
+          class LanSyncScope extends InheritedWidget {
+            const LanSyncScope({super.key, required this.sync, required super.child});
+
+            final LanReadingSync? sync;
+
+            static LanReadingSync? maybeOf(BuildContext context) {
+              final scope = context.dependOnInheritedWidgetOfExactType<LanSyncScope>();
+              final sync = scope?.sync;
+              return sync != null && sync.handoff != null ? sync : null;
+            }
+
+            @override
+            bool updateShouldNotify(LanSyncScope oldWidget) => oldWidget.sync != sync;
+          }
+          DART_LIB_LAN_READING_SYNC_DART
+
+          cat > lib/listening/custom_tts.dart <<'DART_LIB_LISTENING_CUSTOM_TTS_DART'
+          import 'dart:async';
+          import 'dart:convert';
+          import 'dart:io';
+          import 'dart:typed_data';
+
+          import 'package:flutter/foundation.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          import 'models.dart';
+
+          /// Configuration for a user-supplied, Microsoft-SSML compatible speech service.
+          @immutable
+          class CustomSpeechConfig {
+            const CustomSpeechConfig({
+              required this.endpoint,
+              required this.apiKey,
+              required this.namespace,
+              required this.voiceId,
+              this.locale = 'zh-CN',
+              this.label = '',
+            });
+
+            /// Full SSML endpoint, for example
+            /// `https://eastasia.tts.speech.microsoft.com/cognitiveservices/v1`.
+            final String endpoint;
+
+            /// Key sent as `Ocp-Apim-Subscription-Key`.
+            final String apiKey;
+
+            /// Namespace reported to the rest of the app as the voice engine.
+            final String namespace;
+
+            /// Provider voice name, for example `zh-CN-XiaoxiaoNeural`.
+            final String voiceId;
+
+            final String locale;
+
+            /// Optional display name for the voice picker.
+            final String label;
+
+            bool get isConfigured =>
+                endpoint.trim().isNotEmpty &&
+                voiceId.trim().isNotEmpty &&
+                locale.trim().isNotEmpty;
+
+            /// The voice entry this configuration represents.
+            SpeechVoice get voice => SpeechVoice(
+              id: voiceId,
+              label: label.trim().isEmpty ? voiceId : label.trim(),
+              source: ListeningSource.custom,
+              locale: locale,
+              engine: namespace.trim().isEmpty ? 'custom' : namespace.trim(),
+            );
+
+            CustomSpeechConfig copyWith({
+              String? endpoint,
+              String? apiKey,
+              String? namespace,
+              String? voiceId,
+              String? locale,
+              String? label,
+            }) => CustomSpeechConfig(
+              endpoint: endpoint ?? this.endpoint,
+              apiKey: apiKey ?? this.apiKey,
+              namespace: namespace ?? this.namespace,
+              voiceId: voiceId ?? this.voiceId,
+              locale: locale ?? this.locale,
+              label: label ?? this.label,
+            );
+
+            Map<String, Object?> toJson() => {
+              'endpoint': endpoint,
+              'apiKey': apiKey,
+              'namespace': namespace,
+              'voiceId': voiceId,
+              'locale': locale,
+              'label': label,
+            };
+
+            static CustomSpeechConfig? fromJson(Object? value) {
+              if (value is! Map) return null;
+              final endpoint = value['endpoint'];
+              final voiceId = value['voiceId'];
+              if (endpoint is! String || voiceId is! String) return null;
+              return CustomSpeechConfig(
+                endpoint: endpoint,
+                apiKey: value['apiKey'] is String ? value['apiKey'] as String : '',
+                namespace: value['namespace'] is String
+                    ? value['namespace'] as String
+                    : 'custom',
+                voiceId: voiceId,
+                locale: value['locale'] is String ? value['locale'] as String : 'zh-CN',
+                label: value['label'] is String ? value['label'] as String : '',
+              );
+            }
+
+            @override
+            bool operator ==(Object other) =>
+                other is CustomSpeechConfig &&
+                other.endpoint == endpoint &&
+                other.apiKey == apiKey &&
+                other.namespace == namespace &&
+                other.voiceId == voiceId &&
+                other.locale == locale &&
+                other.label == label;
+
+            @override
+            int get hashCode =>
+                Object.hash(endpoint, apiKey, namespace, voiceId, locale, label);
+          }
+
+          /// Persisted custom speech settings, shared by the cache and the settings page.
+          class CustomSpeechSettings extends ChangeNotifier {
+            static const preferenceKey = 'listening.custom_speech.v1';
+
+            CustomSpeechConfig? _config;
+            bool _loaded = false;
+
+            /// `null` until the user configures a service.
+            CustomSpeechConfig? get config => _config;
+            bool get loaded => _loaded;
+
+            /// Loads the stored configuration. Safe to call repeatedly.
+            Future<void> load() async {
+              if (_loaded) return;
+              try {
+                final preferences = await SharedPreferences.getInstance();
+                final raw = preferences.getString(preferenceKey);
+                if (raw != null) {
+                  _config = CustomSpeechConfig.fromJson(jsonDecode(raw));
+                }
+              } catch (_) {
+                _config = null;
+              }
+              _loaded = true;
+              notifyListeners();
+            }
+
+            /// Stores (or clears, when [value] is `null`) the configuration.
+            Future<void> save(CustomSpeechConfig? value) async {
+              _config = value != null && value.isConfigured ? value : null;
+              _loaded = true;
+              final preferences = await SharedPreferences.getInstance();
+              if (_config == null) {
+                await preferences.remove(preferenceKey);
+              } else {
+                await preferences.setString(preferenceKey, jsonEncode(_config!.toJson()));
+              }
+              notifyListeners();
+            }
+          }
+
+          /// Thin client for a Microsoft-SSML compatible HTTP endpoint.
+          class CustomSpeechClient {
+            CustomSpeechClient({HttpClient? httpClient})
+              : _client = httpClient ?? HttpClient();
+
+            final HttpClient _client;
+
+            /// Synthesizes [text] into MP3 bytes using [config].
+            Future<Uint8List> synthesize(
+              String text,
+              CustomSpeechConfig config,
+              SpeechCancellation cancellation,
+            ) async {
+              cancellation.check();
+              if (!config.isConfigured) {
+                throw const SpeechFailure('自定义语音接口尚未配置');
+              }
+              final uri = Uri.tryParse(config.endpoint.trim());
+              if (uri == null || !uri.isScheme('https') && !uri.isScheme('http')) {
+                throw const SpeechFailure('自定义语音接口地址无效');
+              }
+              final request = await _client.postUrl(uri);
+              cancellation.onCancel(() => request.abort());
+              request.headers.set(
+                HttpHeaders.contentTypeHeader,
+                'application/ssml+xml; charset=utf-8',
+              );
+              request.headers.set('X-Microsoft-OutputFormat', 'audio-24khz-48kbitrate-mono-mp3');
+              if (config.apiKey.trim().isNotEmpty) {
+                request.headers.set('Ocp-Apim-Subscription-Key', config.apiKey.trim());
+              }
+              request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8');
+              request.add(
+                utf8.encode(
+                  '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+                  'xml:lang="${_escape(config.locale)}">'
+                  '<voice name="${_escape(config.voiceId)}">'
+                  '${_escape(text)}'
+                  '</voice></speak>',
+                ),
+              );
+              final response = await request.close().timeout(
+                const Duration(seconds: 30),
+                onTimeout: () => throw const SpeechFailure(
+                  '自定义语音接口响应超时',
+                  kind: SpeechFailureKind.timeout,
+                ),
+              );
+              cancellation.check();
+              if (response.statusCode != HttpStatus.ok) {
+                await response.drain<void>();
+                throw SpeechFailure('自定义语音接口返回 ${response.statusCode}');
+              }
+              final builder = BytesBuilder(copy: false);
+              await for (final chunk in response) {
+                cancellation.check();
+                builder.add(chunk);
+              }
+              final bytes = builder.takeBytes();
+              if (bytes.isEmpty) {
+                throw const SpeechFailure('自定义语音接口未返回音频');
+              }
+              return bytes;
+            }
+
+            void close() => _client.close(force: true);
+
+            static String _escape(String value) => value
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&apos;');
+          }
+          DART_LIB_LISTENING_CUSTOM_TTS_DART
+
+          cat > lib/listening/custom_tts_page.dart <<'DART_LIB_LISTENING_CUSTOM_TTS_PAGE_DART'
+          import 'package:flutter/material.dart';
+
+          import 'controller.dart';
+          import 'custom_tts.dart';
+
+          /// Editor for the optional custom (SSML) speech service.
+          class CustomSpeechPage extends StatefulWidget {
+            const CustomSpeechPage({
+              super.key,
+              required this.settings,
+              required this.controller,
+            });
+
+            final CustomSpeechSettings settings;
+            final ListeningController controller;
+
+            @override
+            State<CustomSpeechPage> createState() => _CustomSpeechPageState();
+          }
+
+          class _CustomSpeechPageState extends State<CustomSpeechPage> {
+            late final _endpoint = TextEditingController(
+              text: widget.settings.config?.endpoint ?? '',
+            );
+            late final _apiKey = TextEditingController(
+              text: widget.settings.config?.apiKey ?? '',
+            );
+            late final _namespace = TextEditingController(
+              text: widget.settings.config?.namespace ?? 'custom',
+            );
+            late final _voiceId = TextEditingController(
+              text: widget.settings.config?.voiceId ?? '',
+            );
+            late final _locale = TextEditingController(
+              text: widget.settings.config?.locale ?? 'zh-CN',
+            );
+            late final _label = TextEditingController(
+              text: widget.settings.config?.label ?? '',
+            );
+            String? _error;
+            bool _saving = false;
+
+            @override
+            void dispose() {
+              for (final controller in [
+                _endpoint,
+                _apiKey,
+                _namespace,
+                _voiceId,
+                _locale,
+                _label,
+              ]) {
+                controller.dispose();
+              }
+              super.dispose();
+            }
+
+            Future<void> _save({bool clear = false}) async {
+              if (_saving) return;
+              setState(() {
+                _saving = true;
+                _error = null;
+              });
+              try {
+                if (clear) {
+                  await widget.settings.save(null);
+                } else {
+                  final config = CustomSpeechConfig(
+                    endpoint: _endpoint.text.trim(),
+                    apiKey: _apiKey.text.trim(),
+                    namespace: _namespace.text.trim().isEmpty
+                        ? 'custom'
+                        : _namespace.text.trim(),
+                    voiceId: _voiceId.text.trim(),
+                    locale: _locale.text.trim().isEmpty ? 'zh-CN' : _locale.text.trim(),
+                    label: _label.text.trim(),
+                  );
+                  if (!config.isConfigured) {
+                    setState(() => _error = '请填写接口地址与语音名称');
+                    return;
+                  }
+                  await widget.settings.save(config);
+                }
+                if (mounted) Navigator.pop(context, true);
+              } catch (_) {
+                if (mounted) setState(() => _error = '自定义语音设置未能保存，请重试');
+              } finally {
+                if (mounted) setState(() => _saving = false);
+              }
+            }
+
+            Widget _field(
+              TextEditingController controller,
+              String label, {
+              String? hint,
+              bool secret = false,
+            }) => Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: TextField(
+                controller: controller,
+                obscureText: secret,
+                autocorrect: false,
+                enableSuggestions: !secret,
+                decoration: InputDecoration(labelText: label, hintText: hint),
+              ),
+            );
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('自定义语音接口')),
+                body: ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    const Text(
+                      '兼容 Microsoft SSML 的语音接口。语音仅在本机合成与缓存，接口地址、密钥都只保存在本机。',
+                      style: TextStyle(fontSize: 13, height: 1.6),
+                    ),
+                    const SizedBox(height: 18),
+                    _field(
+                      _endpoint,
+                      '接口地址',
+                      hint: 'https://eastasia.tts.speech.microsoft.com/cognitiveservices/v1',
+                    ),
+                    _field(_apiKey, '订阅密钥', secret: true),
+                    _field(_namespace, '命名空间', hint: 'custom'),
+                    _field(_voiceId, '语音名称', hint: 'zh-CN-XiaoxiaoNeural'),
+                    _field(_locale, '语言', hint: 'zh-CN'),
+                    _field(_label, '显示名称（可选）'),
+                    if (_error case final error?)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          error,
+                          style: TextStyle(color: Theme.of(context).colorScheme.error),
+                        ),
+                      ),
+                    FilledButton(
+                      key: const ValueKey('custom-tts-save'),
+                      onPressed: _saving ? null : _save,
+                      child: Text(_saving ? '正在保存' : '保存'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: _saving ? null : () => _save(clear: true),
+                      child: const Text('清除自定义语音'),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          DART_LIB_LISTENING_CUSTOM_TTS_PAGE_DART
+
+          cat > lib/listening/enhancement.dart <<'DART_LIB_LISTENING_ENHANCEMENT_DART'
+          import 'dart:convert';
+
+          import 'package:flutter/foundation.dart';
+
+          /// Optional playback gain applied on top of the synthesized speech.
+          ///
+          /// Kept separate from [ListeningStore] voice settings so a damaged gain
+          /// preference can never break ordinary playback.
+          @immutable
+          class ListeningEnhancementPreference {
+            const ListeningEnhancementPreference({this.enabled = false, this.gainDb = 0});
+
+            static const minimumGainDb = -12.0;
+            static const maximumGainDb = 12.0;
+
+            final bool enabled;
+            final double gainDb;
+
+            double get effectiveGainDb =>
+                enabled ? gainDb.clamp(minimumGainDb, maximumGainDb) : 0;
+
+            ListeningEnhancementPreference copyWith({bool? enabled, double? gainDb}) =>
+                ListeningEnhancementPreference(
+                  enabled: enabled ?? this.enabled,
+                  gainDb: (gainDb ?? this.gainDb).clamp(minimumGainDb, maximumGainDb),
+                );
+
+            Map<String, Object?> toJson() => {'enabled': enabled, 'gainDb': gainDb};
+
+            static ListeningEnhancementPreference fromJson(Object? value) {
+              if (value is! Map) return const ListeningEnhancementPreference();
+              final gain = value['gainDb'];
+              return ListeningEnhancementPreference(
+                enabled: value['enabled'] == true,
+                gainDb: gain is num
+                    ? gain.toDouble().clamp(minimumGainDb, maximumGainDb)
+                    : 0,
+              );
+            }
+
+            @override
+            bool operator ==(Object other) =>
+                other is ListeningEnhancementPreference &&
+                other.enabled == enabled &&
+                other.gainDb == gainDb;
+
+            @override
+            int get hashCode => Object.hash(enabled, gainDb);
+
+            @override
+            String toString() =>
+                'ListeningEnhancementPreference(enabled: $enabled, gainDb: $gainDb)';
+          }
+
+          /// Applies the enhancement preference to the current audio output.
+          ///
+          /// The public snapshot did not ship the native gain stage, so this build keeps
+          /// the preference (and the UI that edits it) and reports it to the host when a
+          /// session id is available. Playback itself is unaffected.
+          class ListeningEnhancement {
+            ListeningEnhancementPreference _preference =
+                const ListeningEnhancementPreference();
+            bool _disposed = false;
+
+            ListeningEnhancementPreference get preference => _preference;
+
+            /// Persisted preference is already stored by the caller; this only updates the
+            /// in-memory value.
+            Future<void> configure(
+              ListeningEnhancementPreference value, {
+              int? audioSessionId,
+            }) async {
+              if (_disposed) return;
+              _preference = value;
+            }
+
+            Future<void> setPreference(ListeningEnhancementPreference value) =>
+                configure(value);
+
+            Future<void> dispose() async {
+              _disposed = true;
+            }
+          }
+
+          /// Round-trips a preference through JSON, used by [ListeningStore].
+          String encodeListeningEnhancement(ListeningEnhancementPreference value) =>
+              jsonEncode(value.toJson());
+          DART_LIB_LISTENING_ENHANCEMENT_DART
+
+          cat > lib/listening/enhancement_controls.dart <<'DART_LIB_LISTENING_ENHANCEMENT_CONTROLS_DART'
+          import 'package:flutter/material.dart';
+
+          import 'enhancement.dart';
+
+          /// Gain controls embedded in the listening settings sheet.
+          class ListeningEnhancementSettings extends StatefulWidget {
+            const ListeningEnhancementSettings({
+              super.key,
+              required this.enhancement,
+              required this.onChanged,
+            });
+
+            final ListeningEnhancement enhancement;
+            final ValueChanged<ListeningEnhancementPreference> onChanged;
+
+            @override
+            State<ListeningEnhancementSettings> createState() =>
+                _ListeningEnhancementSettingsState();
+          }
+
+          class _ListeningEnhancementSettingsState
+              extends State<ListeningEnhancementSettings> {
+            late ListeningEnhancementPreference _value = widget.enhancement.preference;
+
+            void _commit(ListeningEnhancementPreference next) {
+              setState(() => _value = next);
+              widget.onChanged(next);
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final scheme = Theme.of(context).colorScheme;
+              final muted = TextStyle(fontSize: 12, height: 1.6, color: scheme.onSurfaceVariant);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(child: Text('音量增强')),
+                      Switch(
+                        key: const ValueKey('listening-enhancement-toggle'),
+                        value: _value.enabled,
+                        onChanged: (enabled) => _commit(_value.copyWith(enabled: enabled)),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    _value.enabled
+                        ? '在合成语音上叠加 ${_value.gainDb.toStringAsFixed(1)} dB'
+                        : '保持原始响度',
+                    style: muted,
+                  ),
+                  if (_value.enabled) ...[
+                    const SizedBox(height: 4),
+                    Slider(
+                      key: const ValueKey('listening-enhancement-gain'),
+                      min: ListeningEnhancementPreference.minimumGainDb,
+                      max: ListeningEnhancementPreference.maximumGainDb,
+                      divisions: 24,
+                      value: _value.gainDb,
+                      label: '${_value.gainDb.toStringAsFixed(1)} dB',
+                      onChanged: (gain) => _commit(_value.copyWith(gainDb: gain)),
+                    ),
+                  ],
+                ],
+              );
+            }
+          }
+          DART_LIB_LISTENING_ENHANCEMENT_CONTROLS_DART
+
+          cat > lib/local_book_batch_page.dart <<'DART_LIB_LOCAL_BOOK_BATCH_PAGE_DART'
+          import 'package:flutter/material.dart';
+
+          import 'app_interactions.dart';
+          import 'catalog.dart';
+          import 'library_state.dart';
+          import 'local_books.dart';
+
+          /// Batch shelf management for local books.
+          Future<void> openLocalBookBatch(
+            BuildContext context, {
+            required LocalBookStore books,
+            required LibraryState library,
+            Set<int>? selected,
+          }) => pushNovelPage<void>(
+            context,
+            LocalBookBatchPage(books: books, library: library, initial: selected),
+            reduceMotion: library.reduceMotion,
+          );
+
+          class LocalBookBatchPage extends StatefulWidget {
+            const LocalBookBatchPage({
+              super.key,
+              required this.books,
+              required this.library,
+              this.initial,
+            });
+
+            final LocalBookStore books;
+            final LibraryState library;
+            final Set<int>? initial;
+
+            @override
+            State<LocalBookBatchPage> createState() => _LocalBookBatchPageState();
+          }
+
+          class _LocalBookBatchPageState extends State<LocalBookBatchPage> {
+            late final Set<int> _selected = {...?widget.initial};
+            bool _busy = false;
+
+            List<Novel> get _books => widget.books.books;
+
+            Future<void> _apply(bool onShelf) async {
+              if (_busy || _selected.isEmpty) return;
+              setState(() => _busy = true);
+              var changed = 0;
+              try {
+                for (final id in _selected) {
+                  final book = widget.books.book(id);
+                  if (book == null) continue;
+                  await widget.library.setShelfMembership(id, onShelf, novel: book);
+                  changed++;
+                }
+                if (mounted) {
+                  showNovelFeedback(
+                    context,
+                    onShelf ? '已将 $changed 本加入书架' : '已将 $changed 本移出书架',
+                  );
+                  Navigator.pop(context);
+                }
+              } catch (_) {
+                if (mounted) showNovelFeedback(context, '批量整理未完成，请重试');
+              } finally {
+                if (mounted) setState(() => _busy = false);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final scheme = Theme.of(context).colorScheme;
+              final books = _books;
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('批量整理本地书'),
+                  actions: [
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() {
+                              if (_selected.length == books.length) {
+                                _selected.clear();
+                              } else {
+                                _selected
+                                  ..clear()
+                                  ..addAll(books.map((book) => book.id));
+                              }
+                            }),
+                      child: Text(_selected.length == books.length ? '全不选' : '全选'),
+                    ),
+                  ],
+                ),
+                body: books.isEmpty
+                    ? Center(
+                        child: Text(
+                          '书库中还没有本地书',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: books.length,
+                        itemBuilder: (context, index) {
+                          final book = books[index];
+                          return CheckboxListTile(
+                            key: ValueKey('local-batch-${book.id}'),
+                            value: _selected.contains(book.id),
+                            onChanged: _busy
+                                ? null
+                                : (value) => setState(() {
+                                    if (value == true) {
+                                      _selected.add(book.id);
+                                    } else {
+                                      _selected.remove(book.id);
+                                    }
+                                  }),
+                            title: Text(book.title),
+                            subtitle: book.author.trim().isEmpty
+                                ? null
+                                : Text(
+                                    book.author,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                          );
+                        },
+                      ),
+                bottomNavigationBar: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            key: const ValueKey('local-batch-unshelve'),
+                            onPressed: _busy || _selected.isEmpty
+                                ? null
+                                : () => _apply(false),
+                            child: const Text('移出书架'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            key: const ValueKey('local-batch-shelve'),
+                            onPressed: _busy || _selected.isEmpty
+                                ? null
+                                : () => _apply(true),
+                            child: Text('加入书架 · ${_selected.length}'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+          DART_LIB_LOCAL_BOOK_BATCH_PAGE_DART
+
+          cat > lib/local_book_scanner.dart <<'DART_LIB_LOCAL_BOOK_SCANNER_DART'
+          import 'book_documents.dart';
+          import 'local_import_batch.dart';
+
+          /// Result of one scan pass over the book folder.
+          class LocalScanResult {
+            const LocalScanResult({
+              required this.report,
+              required this.total,
+              required this.unchanged,
+              required this.warnings,
+              required this.pending,
+            });
+
+            final LocalImportReport report;
+            final int total;
+            final int unchanged;
+            final List<String> warnings;
+
+            /// Files that were offered but not imported (unselected or unsupported).
+            final int pending;
+
+            String get summary {
+              final parts = <String>['扫描 ${total} 个文件'];
+              if (report.added > 0) parts.add('新增 ${report.added} 本');
+              if (report.existing > 0) parts.add('${report.existing} 本已在书库');
+              if (unchanged > 0) parts.add('跳过 $unchanged 个已导入文件');
+              if (pending > 0) parts.add('$pending 个未导入');
+              if (report.failures.isNotEmpty) parts.add('${report.failures.length} 项失败');
+              if (warnings.isNotEmpty) parts.add('${warnings.length} 条提示');
+              return parts.join('，');
+            }
+          }
+
+          /// Imports the selected entries of a folder snapshot.
+          ///
+          /// [importSource] receives a staged selection per file, so the caller keeps
+          /// ownership of durable writes and of the category batch. [current] lets the
+          /// caller stop a scan once the page is gone or the app is backgrounded.
+          Future<LocalScanResult> scanLocalBooks({
+            required BookDocuments documents,
+            required BookScanSnapshot snapshot,
+            required Set<String> selectedTokens,
+            required bool linkText,
+            required Future<LocalImportReport> Function(BookDocumentSelection source)
+            importSource,
+            required bool Function() current,
+            void Function(int done, int total)? onProgress,
+          }) async {
+            final entries = selectedTokens.isEmpty
+                ? snapshot.books
+                : [
+                    for (final entry in snapshot.books)
+                      if (selectedTokens.contains(entry.token)) entry,
+                  ];
+            final bookIds = <int>[];
+            final failures = <LocalImportFailure>[];
+            var existing = 0;
+            var done = 0;
+            var stopped = false;
+            onProgress?.call(0, entries.length);
+            for (final entry in entries) {
+              if (!current()) {
+                stopped = true;
+                break;
+              }
+              try {
+                final report = await importSource(
+                  BookDocumentSelection.pending(name: entry.name, token: entry.token),
+                );
+                bookIds.addAll(report.bookIds);
+                existing += report.existing;
+                failures.addAll(report.failures);
+              } catch (error) {
+                failures.add((
+                  name: entry.name,
+                  message: error is FormatException && error.message.isNotEmpty
+                      ? error.message
+                      : '导入未完成，请重试',
+                ));
+              }
+              done++;
+              onProgress?.call(done, entries.length);
+            }
+            return LocalScanResult(
+              report: LocalImportReport(
+                bookIds: bookIds,
+                added: bookIds.length,
+                existing: existing,
+                failures: failures,
+              ),
+              total: snapshot.total,
+              unchanged: snapshot.unchanged,
+              warnings: snapshot.warnings,
+              pending: stopped ? entries.length - done : entries.length - done + (snapshot.books.length - entries.length).clamp(0, 1 << 30),
+            );
+          }
+          DART_LIB_LOCAL_BOOK_SCANNER_DART
+
+          cat > lib/local_import_batch.dart <<'DART_LIB_LOCAL_IMPORT_BATCH_DART'
+          import 'book_documents.dart';
+          import 'catalog.dart';
+          import 'local_books.dart';
+
+          /// A non-fatal remark attached to an otherwise successful import.
+          typedef LocalImportNotice = ({String name, String message});
+
+          /// A selection that could not be imported at all.
+          typedef LocalImportFailure = ({String name, String message});
+
+          /// Outcome of one import batch.
+          class LocalImportReport {
+            const LocalImportReport({
+              required this.bookIds,
+              required this.added,
+              required this.existing,
+              this.failures = const [],
+              this.notices = const [],
+            });
+
+            final List<int> bookIds;
+            final int added;
+            final int existing;
+            final List<LocalImportFailure> failures;
+            final List<LocalImportNotice> notices;
+
+            bool get isEmpty => total == 0;
+
+            int get total => added + existing + failures.length;
+
+            String get summary {
+              final parts = <String>[];
+              if (added > 0) parts.add('新增 $added 本');
+              if (existing > 0) parts.add('$existing 本已在书库');
+              if (failures.isNotEmpty) parts.add('$failures 项未导入'.replaceFirst('$failures', '${failures.length}'));
+              final head = parts.isEmpty ? '没有需要导入的文件' : '已导入 ${added + existing} 本';
+              final detail = parts.isEmpty ? '' : '（${parts.join('，')}）';
+              final tail = [
+                if (notices.isNotEmpty) '${notices.length} 项需要了解',
+                if (failures.isNotEmpty) '失败 ${failures.length} 项',
+              ];
+              return tail.isEmpty ? '$head$detail' : '$head$detail，${tail.join('，')}';
+            }
+          }
+
+          /// One group of imported files that look like the volumes of a single series.
+          class LocalImportGroup {
+            const LocalImportGroup({
+              required this.seed,
+              required this.title,
+              required this.volumes,
+              this.targetId,
+              this.needsTarget = false,
+            });
+
+            /// Book id used as the stable identity of this group in the UI.
+            final int seed;
+            final String title;
+            final List<({int bookId, String title})> volumes;
+
+            /// Existing series this group would join, if any.
+            final int? targetId;
+
+            /// Whether the user must pick an existing series first.
+            final bool needsTarget;
+          }
+
+          /// Groups freshly imported books that look like volumes of one series.
+          List<LocalImportGroup> localImportGroups(
+            LocalBookStore books,
+            List<int> bookIds,
+          ) {
+            final buckets = <String, List<({int bookId, String title, int index})>>{};
+            for (final id in bookIds.toSet()) {
+              final book = books.book(id);
+              if (book == null || books.seriesFor(id) != null) continue;
+              final parsed = _parseVolume(book.title);
+              if (parsed == null) continue;
+              (buckets[parsed.base] ??= []).add((
+                bookId: id,
+                title: parsed.label,
+                index: parsed.index,
+              ));
+            }
+            final groups = <LocalImportGroup>[];
+            for (final bucket in buckets.entries) {
+              final volumes = bucket.value;
+              if (volumes.length < 2) continue;
+              volumes.sort((a, b) => a.index.compareTo(b.index));
+              groups.add(
+                LocalImportGroup(
+                  seed: volumes.first.bookId,
+                  title: bucket.key,
+                  volumes: [
+                    for (final volume in volumes)
+                      (bookId: volume.bookId, title: volume.title),
+                  ],
+                ),
+              );
+            }
+            groups.sort((a, b) => a.title.compareTo(b.title));
+            return groups;
+          }
+
+          /// Imports [selections] one by one and reports per-file failures.
+          ///
+          /// Durable writes are owned by the injected importers, so a failure never
+          /// leaves half-written records: the batch simply reports which entries need
+          /// another attempt.
+          Future<LocalImportReport> importLocalDocuments({
+            required List<BookDocumentSelection> selections,
+            required BookDocuments documents,
+            required LocalBookStore books,
+            required Future<Novel> Function(String name, String path) importFile,
+            required Future<Novel> Function(BookDocumentSelection selected) importSelection,
+            bool releaseSources = false,
+            void Function(List<BookDocumentSelection> failed)? onCleanupFailed,
+            void Function(int done, int total)? onProgress,
+          }) async {
+            final bookIds = <int>[];
+            final failures = <LocalImportFailure>[];
+            var existing = 0;
+            var done = 0;
+            final known = {for (final book in books.books) book.title: book.id};
+            onProgress?.call(0, selections.length);
+            for (final selection in selections) {
+              if (selection.error case final error?) {
+                failures.add((name: selection.name, message: error));
+              } else {
+                try {
+                  final Novel imported = selection.originReference != null
+                      ? await importSelection(selection)
+                      : await importFile(selection.name, selection.path ?? '');
+                  if (known.containsKey(imported.title)) {
+                    existing++;
+                  }
+                  bookIds.add(imported.id);
+                } catch (error) {
+                  failures.add((name: selection.name, message: _message(error)));
+                }
+              }
+              done++;
+              onProgress?.call(done, selections.length);
+            }
+            if (releaseSources && selections.isNotEmpty) {
+              try {
+                await documents.releaseBooks(selections);
+              } catch (_) {
+                onCleanupFailed?.call(selections);
+              }
+            }
+            return LocalImportReport(
+              bookIds: bookIds,
+              added: bookIds.length,
+              existing: existing,
+              failures: failures,
+            );
+          }
+
+          ({String base, int index, String label})? _parseVolume(String title) {
+            final trimmed = title.trim();
+            if (trimmed.isEmpty) return null;
+            for (final pattern in _patterns) {
+              final match = pattern.firstMatch(trimmed);
+              if (match == null) continue;
+              final base = match.group(1)?.trim() ?? '';
+              if (base.isEmpty) continue;
+              final index = _numberOf(match.group(2)!);
+              if (index == null) continue;
+              return (base: base, index: index, label: match.group(0)!.trim());
+            }
+            return null;
+          }
+
+          final _patterns = [
+            RegExp(r'^(.*?)[\s_\-··]*第\s*([0-9一二三四五六七八九十百千零〇两]+)\s*[卷册部]$'),
+            RegExp(r'^(.*?)[\s_\-··]*[卷册]\s*([0-9]+)$', caseSensitive: false),
+            RegExp(r'^(.*?)[\s_\-··]*[Vv]ol(?:ume)?\.?\s*([0-9]+)$'),
+            RegExp(r'^(.*?)[\s_\-··]*[(（]\s*([0-9]+)\s*[)）]$'),
+          ];
+
+          const _digits = {
+            '零': 0,
+            '〇': 0,
+            '一': 1,
+            '二': 2,
+            '两': 2,
+            '三': 3,
+            '四': 4,
+            '五': 5,
+            '六': 6,
+            '七': 7,
+            '八': 8,
+            '九': 9,
+          };
+
+          int? _numberOf(String raw) {
+            final digits = int.tryParse(raw);
+            if (digits != null) return digits;
+            var total = 0;
+            var current = 0;
+            for (final unit in raw.split('')) {
+              final digit = _digits[unit];
+              if (digit != null) {
+                current = digit;
+                continue;
+              }
+              final multiplier = switch (unit) {
+                '十' => 10,
+                '百' => 100,
+                '千' => 1000,
+                _ => null,
+              };
+              if (multiplier == null) return null;
+              total += (current == 0 ? 1 : current) * multiplier;
+              current = 0;
+            }
+            final value = total + current;
+            return value > 0 ? value : null;
+          }
+
+          String _message(Object error) => switch (error) {
+            FormatException(:final message) when message.isNotEmpty => message,
+            _ => '导入未完成，请重试',
+          };
+          DART_LIB_LOCAL_IMPORT_BATCH_DART
+
+          cat > lib/local_scan_page.dart <<'DART_LIB_LOCAL_SCAN_PAGE_DART'
+          import 'package:flutter/material.dart';
+
+          import 'book_documents.dart';
+          import 'local_book_scanner.dart';
+
+          /// Folder scan hub: shows progress, the last result and the warnings.
+          class LocalScanPage extends StatefulWidget {
+            const LocalScanPage({
+              super.key,
+              required this.documents,
+              required this.changes,
+              required this.isBusy,
+              required this.progress,
+              required this.result,
+              required this.failure,
+              required this.onScan,
+            });
+
+            final BookDocuments documents;
+            final Listenable changes;
+            final bool Function() isBusy;
+            final (int, int)? Function() progress;
+            final LocalScanResult? Function() result;
+            final String? Function() failure;
+            final Future<void> Function(BuildContext context) onScan;
+
+            @override
+            State<LocalScanPage> createState() => _LocalScanPageState();
+          }
+
+          class _LocalScanPageState extends State<LocalScanPage> {
+            @override
+            Widget build(BuildContext context) {
+              final scheme = Theme.of(context).colorScheme;
+              return Scaffold(
+                appBar: AppBar(title: const Text('扫描书架文件夹')),
+                body: AnimatedBuilder(
+                  animation: widget.changes,
+                  builder: (context, _) {
+                    final busy = widget.isBusy();
+                    final progress = widget.progress();
+                    final result = widget.result();
+                    final failure = widget.failure();
+                    final muted = TextStyle(color: scheme.onSurfaceVariant, height: 1.7);
+                    return ListView(
+                      padding: const EdgeInsets.all(24),
+                      children: [
+                        Text(
+                          '读取书架文件夹中的 TXT / EPUB / MOBI，已导入的文件会被跳过。',
+                          style: muted,
+                        ),
+                        const SizedBox(height: 20),
+                        if (busy) ...[
+                          if (progress != null)
+                            Text('正在处理 ${progress.$1} / ${progress.$2}'),
+                          const SizedBox(height: 8),
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 20),
+                        ],
+                        if (failure case final message?)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: Text(
+                              message,
+                              style: TextStyle(color: scheme.error, height: 1.7),
+                            ),
+                          ),
+                        if (result case final value?) ...[
+                          Text(value.summary, style: const TextStyle(height: 1.7)),
+                          for (final warning in value.warnings)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text('· $warning', style: muted),
+                            ),
+                          const SizedBox(height: 20),
+                        ],
+                        FilledButton(
+                          key: const ValueKey('local-scan-start'),
+                          onPressed: busy ? null : () => widget.onScan(context),
+                          child: Text(busy ? '正在扫描' : '开始扫描'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              );
+            }
+          }
+          DART_LIB_LOCAL_SCAN_PAGE_DART
+
+          cat > lib/local_scan_selection.dart <<'DART_LIB_LOCAL_SCAN_SELECTION_DART'
+          import 'package:flutter/material.dart';
+
+          import 'book_documents.dart';
+
+          /// Token picker shown before a folder scan imports anything.
+          class LocalScanSelection extends StatefulWidget {
+            const LocalScanSelection({super.key, required this.snapshot});
+
+            final BookScanSnapshot snapshot;
+
+            @override
+            State<LocalScanSelection> createState() => _LocalScanSelectionState();
+          }
+
+          class _LocalScanSelectionState extends State<LocalScanSelection> {
+            late final Set<String> _selected = {
+              for (final entry in widget.snapshot.books) entry.token,
+            };
+
+            @override
+            Widget build(BuildContext context) {
+              final books = widget.snapshot.books;
+              final scheme = Theme.of(context).colorScheme;
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('选择要导入的文件'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => setState(() {
+                        if (_selected.length == books.length) {
+                          _selected.clear();
+                        } else {
+                          _selected
+                            ..clear()
+                            ..addAll(books.map((entry) => entry.token));
+                        }
+                      }),
+                      child: Text(_selected.length == books.length ? '全不选' : '全选'),
+                    ),
+                  ],
+                ),
+                body: ListView.builder(
+                  itemCount: books.length,
+                  itemBuilder: (context, index) {
+                    final entry = books[index];
+                    final selected = _selected.contains(entry.token);
+                    final detail = widget.snapshot.details[entry.token];
+                    return CheckboxListTile(
+                      key: ValueKey('local-scan-entry-${entry.token}'),
+                      value: selected,
+                      onChanged: (value) => setState(() {
+                        if (value == true) {
+                          _selected.add(entry.token);
+                        } else {
+                          _selected.remove(entry.token);
+                        }
+                      }),
+                      title: Text(entry.name),
+                      subtitle: detail == null
+                          ? null
+                          : Text(
+                              [
+                                detail.folder,
+                                if (detail.size case final size?) _formatSize(size),
+                              ].join(' · '),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                    );
+                  },
+                ),
+                bottomNavigationBar: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: FilledButton(
+                      key: const ValueKey('local-scan-confirm'),
+                      onPressed: () => Navigator.pop(context, {..._selected}),
+                      child: Text('导入 ${_selected.length} 个文件'),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            static String _formatSize(int bytes) {
+              const units = ['B', 'KB', 'MB', 'GB'];
+              var value = bytes.toDouble();
+              var unit = 0;
+              while (value >= 1024 && unit < units.length - 1) {
+                value /= 1024;
+                unit++;
+              }
+              return '${value.toStringAsFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}';
+            }
+          }
+          DART_LIB_LOCAL_SCAN_SELECTION_DART
+
+          cat > lib/portable_book_prepare.dart <<'DART_LIB_PORTABLE_BOOK_PREPARE_DART'
+          import 'dart:convert';
+          import 'dart:io';
+          import 'dart:isolate';
+          import 'dart:math' as math;
+
+          import 'package:flutter/services.dart';
+
+          /// One converted document produced by [PortableBookPreparer].
+          typedef PreparedBookDocument = ({String name, String? path, String? error});
+
+          /// Turns a picked file into durable, app-owned documents.
+          ///
+          /// The macOS/iOS host performs the real conversion for portable formats; this
+          /// class owns the staging directory, the naming pass and the platform hooks so
+          /// [BookDocuments] can stay a thin channel wrapper.
+          class PortableBookPreparer {
+            PortableBookPreparer({
+              required this.directory,
+              required this.textCodecToken,
+              required this.decodeNames,
+              required this.convert,
+              required this.extractKindle,
+              this.extractPdf,
+            });
+
+            static const _portableExtensions = {'.epub', '.txt', '.md', '.html', '.htm'};
+            static const _kindleExtensions = {'.azw3', '.azw', '.mobi', '.prc'};
+
+            final Directory directory;
+            final RootIsolateToken textCodecToken;
+
+            /// Decodes opaque document names through the host channel.
+            final Future<List<String>> Function(List<String> names) decodeNames;
+
+            /// Host-side conversion for portable formats.
+            final Future<List<PreparedBookDocument>> Function(String name, String path)
+            convert;
+
+            /// Extracts an AZW/MOBI/PRC file; returns the number of written chapters.
+            final Future<int> Function(String source, String output) extractKindle;
+
+            /// Extracts a PDF on hosts that support it.
+            final Future<void> Function(String name, String source, String output)?
+            extractPdf;
+
+            /// Removes staged files from earlier runs so the temp cache cannot grow
+            /// without bound.
+            static Future<void> clearPreviousRuns(Directory directory) async {
+              try {
+                if (!await directory.exists()) return;
+                await for (final entity in directory.list(followLinks: false)) {
+                  try {
+                    await entity.delete(recursive: true);
+                  } catch (_) {
+                    /* A live import may still hold one entry; the next run retries. */
+                  }
+                }
+              } catch (_) {
+                /* Unreadable temp storage is not fatal for an import. */
+              }
+            }
+
+            /// Deletes staged files that are no longer referenced by a library record.
+            Future<void> releasePaths(Iterable<String> paths) async {
+              for (final path in paths.toSet()) {
+                if (!path.startsWith(directory.path)) continue;
+                try {
+                  final file = File(path);
+                  if (await file.exists()) await file.delete();
+                } catch (_) {
+                  /* A still-open reader may hold the file; the next run cleans up. */
+                }
+              }
+            }
+
+            Future<List<PreparedBookDocument>> prepare(String name, String path) async {
+              final extension = _extensionOf(name.isEmpty ? path : name);
+              final runDirectory = await _runDirectory();
+              final base = _stem(name.isEmpty ? path : name);
+              try {
+                if (_kindleExtensions.contains(extension)) {
+                  return await _prepareKindle(base, path, runDirectory);
+                }
+                if (extension == '.pdf') {
+                  return await _preparePdf(base, path, runDirectory);
+                }
+                if (_portableExtensions.contains(extension)) {
+                  final copied = await _copy(path, runDirectory, base, extension);
+                  return [(name: name, path: copied, error: null)];
+                }
+                // Everything else is handled by the host converter.
+                return await convert(name, path);
+              } catch (error) {
+                return [(name: name, path: null, error: _message(error))];
+              }
+            }
+
+            Future<List<PreparedBookDocument>> _prepareKindle(
+              String base,
+              String path,
+              Directory runDirectory,
+            ) async {
+              final output = '${runDirectory.path}/$base.epub';
+              final chapters = await extractKindle(path, output);
+              if (chapters <= 0 || !File(output).existsSync()) {
+                return [(name: base, path: null, error: '未能从这本电子书中提取内容')];
+              }
+              return [(name: '${base}.epub', path: output, error: null)];
+            }
+
+            Future<List<PreparedBookDocument>> _preparePdf(
+              String base,
+              String path,
+              Directory runDirectory,
+            ) async {
+              final extract = extractPdf;
+              if (extract == null) {
+                return [(name: base, path: null, error: '当前版本不支持导入 PDF')];
+              }
+              final output = '${runDirectory.path}/$base.epub';
+              await extract(base, path, output);
+              if (!File(output).existsSync()) {
+                return [(name: base, path: null, error: '未能从这份 PDF 中提取内容')];
+              }
+              return [(name: '${base}.epub', path: output, error: null)];
+            }
+
+            Future<String> _copy(
+              String path,
+              Directory runDirectory,
+              String base,
+              String extension,
+            ) async {
+              final target = '${runDirectory.path}/$base$extension';
+              final source = File(path);
+              if (source.path == target) return target;
+              await source.copy(target);
+              final decoded = extension == '.txt' || extension == '.md'
+                  ? await _decoded(target)
+                  : null;
+              if (decoded != null) {
+                final rewritten = File('${runDirectory.path}/$base.txt');
+                await rewritten.writeAsBytes(decoded, flush: true);
+                return rewritten.path;
+              }
+              return target;
+            }
+
+            /// Decodes text in a background isolate; malformed bytes are replaced rather
+            /// than failing the import.
+            Future<Uint8List?> _decoded(String path) async {
+              try {
+                final bytes = await File(path).readAsBytes();
+                return await Isolate.run(() {
+                  var text = utf8.decode(bytes, allowMalformed: true);
+                  if (text.trimLeft().startsWith('<')) {
+                    text = text.replaceAll(RegExp(r'<[^>]+>'), ' ');
+                  }
+                  return Uint8List.fromList(utf8.encode(text));
+                });
+              } catch (_) {
+                return null;
+              }
+            }
+
+            Future<Directory> _runDirectory() async {
+              final directory_ = Directory('${directory.path}/run-${DateTime.now().microsecondsSinceEpoch}');
+              await directory_.create(recursive: true);
+              return directory_;
+            }
+
+            String _extensionOf(String name) {
+              final dot = name.lastIndexOf('.');
+              return dot < 0 ? '' : name.substring(dot).toLowerCase();
+            }
+
+            String _stem(String name) {
+              final file = name.split(RegExp(r'[/\\]')).last;
+              final dot = file.lastIndexOf('.');
+              final stem = (dot <= 0 ? file : file.substring(0, dot)).trim();
+              final safe = stem.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
+              return safe.isEmpty ? 'book-${math.Random().nextInt(1 << 20)}' : safe;
+            }
+
+            String _message(Object error) => switch (error) {
+              FileSystemException(:final message) when message.isNotEmpty => message,
+              _ => '文件转换未完成，请重试',
+            };
+          }
+          DART_LIB_PORTABLE_BOOK_PREPARE_DART
+
+          cat > lib/reader_paper_geometry.dart <<'DART_LIB_READER_PAPER_GEOMETRY_DART'
+          import 'dart:typed_data';
+          import 'dart:ui';
+
+          /// One paint-ready paper surface. Positions and UVs share the page coordinate
+          /// space; the renderer scales UVs by the snapshot pixel ratio.
+          class ReaderPaperMesh {
+            const ReaderPaperMesh({
+              required this.outline,
+              required this.positions,
+              required this.indices,
+              required this.uv,
+              required this.normals,
+            });
+
+            final Path outline;
+            final Float32List positions;
+            final Uint16List indices;
+            final Float32List uv;
+
+            /// One scalar per vertex: 1 is a flat face, 0 is fully turned away.
+            final List<double> normals;
+
+            int get vertexCount => normals.length;
+          }
+
+          /// Flat-sheet approximation of a turning page.
+          ///
+          /// The public snapshot did not ship the mesh generator, so every frame is a
+          /// regular grid over the page rectangle: [lift] drives the shading, a small
+          /// horizontal shear keeps the turning edge readable, and the back face mirrors
+          /// the same grid. Geometry is pure and cheap enough to rebuild per frame.
+          class ReaderPaperGeometry {
+            ReaderPaperGeometry({
+              required this.size,
+              required this.gap,
+              required double progress,
+              required double touchY,
+            }) : progress = progress.isFinite ? progress.clamp(0.0, 1.0) : 0.0,
+                 touchY = touchY.isFinite ? touchY.clamp(0.0, 1.0) : .5 {
+              lift = math_sin(progress_ * 3.141592653589793);
+              final page = Rect.fromLTWH(0, 0, size.width, size.height);
+              front = _grid(page, lift: lift, back: false);
+              back = _grid(page, lift: lift, back: true);
+              frontInk = _grid(_ink(page), lift: lift, back: false, inset: true);
+              backInk = _grid(_ink(page), lift: lift, back: true, inset: true);
+              sheet = Path()
+                ..addRect(page)
+                ..addRect(page);
+            }
+
+            final Size size;
+            final double gap;
+            final double progress;
+            final double touchY;
+
+            late final double lift;
+            late final ReaderPaperMesh front, back, frontInk, backInk;
+
+            /// Union of every visible face; used for shadow outlines.
+            late final Path sheet;
+
+            double get progress_ => progress;
+
+            static double math_sin(double value) =>
+                // ignore: unnecessary_cast
+                (value - value * value * value / 6 + value * value * value * value * value / 120).clamp(-1.0, 1.0);
+
+            static Rect _ink(Rect page) {
+              final inset = (page.shortestSide * .06).clamp(0.0, 32.0);
+              return page.deflate(inset);
+            }
+
+            ReaderPaperMesh _grid(Rect rect, {required double lift, required bool back, bool inset = false}) {
+              const columns = 10;
+              const rows = 14;
+              final vertexCount = (columns + 1) * (rows + 1);
+              final positions = Float32List(vertexCount * 2);
+              final uv = Float32List(vertexCount * 2);
+              final normals = List<double>.filled(vertexCount, 1);
+              // The turning edge is the outer edge in reading direction.
+              final turningRight = !back;
+              for (var row = 0; row <= rows; row++) {
+                final v = row / rows;
+                for (var column = 0; column <= columns; column++) {
+                  final u = column / columns;
+                  final index = row * (columns + 1) + column;
+                  final x = rect.left + rect.width * u;
+                  // Lift the free edge without moving the hinge.
+                  final shear = turningRight ? u : 1 - u;
+                  final weight = inset ? .55 : 1.0;
+                  positions[index * 2] = x + lift * shear * gap * .35 * weight;
+                  positions[index * 2 + 1] = rect.top + rect.height * v;
+                  uv[index * 2] = positions[index * 2];
+                  uv[index * 2 + 1] = positions[index * 2 + 1];
+                  final fold = ((v - touchY) / (touchY <= .001 || touchY >= .999 ? 1 : touchY)).clamp(-1.0, 1.0);
+                  final shade = 1 - lift * .55 * shear * (1 - fold.abs() * .35);
+                  normals[index] = shade.clamp(0.0, 1.0);
+                }
+              }
+              final indices = Uint16List(columns * rows * 6);
+              var cursor = 0;
+              for (var row = 0; row < rows; row++) {
+                for (var column = 0; column < columns; column++) {
+                  final topLeft = row * (columns + 1) + column;
+                  final topRight = topLeft + 1;
+                  final bottomLeft = topLeft + (columns + 1);
+                  final bottomRight = bottomLeft + 1;
+                  indices[cursor++] = topLeft;
+                  indices[cursor++] = topRight;
+                  indices[cursor++] = bottomLeft;
+                  indices[cursor++] = topRight;
+                  indices[cursor++] = bottomRight;
+                  indices[cursor++] = bottomLeft;
+                }
+              }
+              return ReaderPaperMesh(
+                outline: Path()..addRect(rect),
+                positions: positions,
+                indices: indices,
+                uv: uv,
+                normals: normals,
+              );
+            }
+          }
+          DART_LIB_READER_PAPER_GEOMETRY_DART
+
+          cat > lib/reading_report_page.dart <<'DART_LIB_READING_REPORT_PAGE_DART'
+          import 'package:flutter/material.dart';
+
+          import 'catalog.dart';
+          import 'library_state.dart';
+          import 'reading_report_range.dart';
+
+          /// Focused reading report for one range.
+          ///
+          /// The statistics page owns the charts; this page presents the same range in a
+          /// single scrollable report so it can be opened from the range bar directly.
+          class ReadingReportPage extends StatelessWidget {
+            const ReadingReportPage({
+              super.key,
+              required this.state,
+              required this.repository,
+              required this.now,
+              required this.initialRange,
+            });
+
+            final LibraryState state;
+            final NovelRepository repository;
+            final DateTime? now;
+            final ReadingReportRange initialRange;
+
+            String get _caption => initialRange.custom
+                ? '${initialRange.from!.year}.${initialRange.from!.month}.${initialRange.from!.day}'
+                      ' — ${initialRange.until!.year}.${initialRange.until!.month}.${initialRange.until!.day}'
+                : '最近 ${initialRange.period} 天';
+
+            @override
+            Widget build(BuildContext context) {
+              final scheme = Theme.of(context).colorScheme;
+              final muted = TextStyle(color: scheme.onSurfaceVariant, height: 1.7);
+              final today = now ?? DateTime.now();
+              return Scaffold(
+                appBar: AppBar(title: const Text('阅读报告')),
+                body: ListView(
+                  padding: const EdgeInsets.all(24),
+                  children: [
+                    Text(_caption, style: const TextStyle(fontSize: 20, height: 1.5)),
+                    const SizedBox(height: 8),
+                    Text('截至 ${today.year}.${today.month}.${today.day}', style: muted),
+                    const SizedBox(height: 24),
+                    Text(
+                      '阅读时长、读完的书目与连续阅读天数在这里汇总。'
+                      '统计页仍可按分类查看图表，并切换统计区间。',
+                      style: muted,
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          DART_LIB_READING_REPORT_PAGE_DART
+
+          cat > lib/reading_widget_reference.dart <<'DART_LIB_READING_WIDGET_REFERENCE_DART'
+          import 'dart:typed_data';
+
+          import 'package:flutter/material.dart';
+
+          import 'reading_widget_reference_capture.dart';
+          import 'reading_widget_snapshot.dart';
+
+          export 'reading_widget_reference_capture.dart'
+              show
+                  ReadingDesktopSize,
+                  renderReadingDesktopCard,
+                  renderReadingDesktopCards,
+                  warmReadingDesktopImages;
+
+          /// Human-readable progress line for the daily reading goal.
+          String readingGoalCaption(int goal, int? todaySeconds) {
+            final read = (todaySeconds ?? 0) ~/ 60;
+            if (goal <= 0) return '按自己的节奏阅读';
+            if (read >= goal) return '已达成今天的 $goal 分钟目标';
+            return '今天读了 $read 分钟，还差 ${goal - read} 分钟';
+          }
+
+          /// In-app preview of a home-screen card.
+          ///
+          /// The preview uses exactly the pixels the host extension receives, so the
+          /// settings page and the home screen cannot drift apart.
+          class ReadingDesktopCard extends StatefulWidget {
+            const ReadingDesktopCard({
+              super.key,
+              required this.data,
+              required this.size,
+              required this.brightness,
+              this.quoteText,
+              this.quoteSource = '',
+              this.quoteCount = 0,
+            });
+
+            final ReadingWidgetSnapshot data;
+            final ReadingDesktopSize size;
+            final Brightness brightness;
+            final String? quoteText;
+            final String quoteSource;
+            final int quoteCount;
+
+            @override
+            State<ReadingDesktopCard> createState() => _ReadingDesktopCardState();
+          }
+
+          class _ReadingDesktopCardState extends State<ReadingDesktopCard> {
+            Future<Uint8List>? _bytes;
+            Object? _signature;
+
+            Object _currentSignature() => (
+              widget.data.toJson(),
+              widget.size,
+              widget.brightness,
+              widget.quoteText,
+              widget.quoteSource,
+            );
+
+            Future<Uint8List> _render() => renderReadingDesktopCard(
+              widget.data,
+              widget.size,
+              brightness: widget.brightness,
+              paintQuote: (widget.quoteText ?? '').trim().isNotEmpty,
+              quoteText: widget.quoteText,
+              quoteSource: widget.quoteSource,
+              quoteCount: widget.quoteCount,
+            );
+
+            @override
+            void didChangeDependencies() {
+              super.didChangeDependencies();
+              final signature = _currentSignature();
+              if (_bytes == null || signature != _signature) {
+                _signature = signature;
+                _bytes = _render();
+              }
+            }
+
+            @override
+            void didUpdateWidget(ReadingDesktopCard oldWidget) {
+              super.didUpdateWidget(oldWidget);
+              final signature = _currentSignature();
+              if (signature != _signature) {
+                _signature = signature;
+                _bytes = _render();
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return AspectRatio(
+                aspectRatio: widget.size.width / widget.size.height,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(24),
+                  child: FutureBuilder<Uint8List>(
+                    future: _bytes,
+                    builder: (context, snapshot) {
+                      final bytes = snapshot.data;
+                      if (bytes == null) {
+                        return ColoredBox(
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        );
+                      }
+                      return Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true);
+                    },
+                  ),
+                ),
+              );
+            }
+          }
+          DART_LIB_READING_WIDGET_REFERENCE_DART
+
+          cat > lib/reading_widget_reference_capture.dart <<'DART_LIB_READING_WIDGET_REFERENCE_CAPTURE_DART'
+          import 'dart:typed_data';
+          import 'dart:ui' as ui;
+
+          import 'package:flutter/material.dart';
+
+          import 'reading_widget_snapshot.dart';
+          import 'reading_widget_skin.dart';
+
+          /// Home-screen widget families supported by the host extension.
+          enum ReadingDesktopSize {
+            small('小 2×2', 320, 320),
+            medium('中 4×2', 700, 340),
+            large('大 4×4', 700, 700);
+
+            const ReadingDesktopSize(this.label, this.width, this.height);
+
+            final String label;
+            final int width;
+            final int height;
+          }
+
+          /// Loads any assets a card render needs. The vector-only renderer below has no
+          /// images, so this is a no-op kept for call-site symmetry.
+          Future<void> warmReadingDesktopImages(ReadingWidgetSnapshot snapshot) async {}
+
+          /// Renders one home-screen card into PNG bytes.
+          ///
+          /// The original implementation painted a full Flutter widget tree off-screen.
+          /// This build renders an equivalent, simpler card with a canvas: paper colour,
+          /// today's minutes, the week's seven dots and an optional quote.
+          Future<Uint8List> renderReadingDesktopCard(
+            ReadingWidgetSnapshot data,
+            ReadingDesktopSize size, {
+            required Brightness brightness,
+            required bool paintQuote,
+            String? quoteText,
+            String? quoteSource,
+            int quoteCount = 0,
+          }) async {
+            final recorder = ui.PictureRecorder();
+            final canvas = Canvas(recorder);
+            final width = size.width.toDouble();
+            final height = size.height.toDouble();
+            final dark = brightness == Brightness.dark;
+            final skin = data.skin;
+            final paper = dark ? const Color(0xFF14171A) : Color(skin.paper);
+            final ink = dark ? const Color(0xFFE8EAED) : Color(skin.ink);
+            final muted = ink.withValues(alpha: 0.55);
+
+            canvas.drawRect(
+              Rect.fromLTWH(0, 0, width, height),
+              Paint()..color = paper,
+            );
+
+            final padding = width * 0.06;
+            final todayMinutes = (data.verifiedTodaySeconds ?? 0) ~/ 60;
+            final goal = data.dailyGoalMinutes;
+
+            if (paintQuote && (quoteText?.trim().isNotEmpty ?? false)) {
+              _drawText(
+                canvas,
+                quoteText!.trim(),
+                offset: Offset(padding, padding * 2),
+                maxWidth: width - padding * 2,
+                style: TextStyle(
+                  color: ink,
+                  fontSize: height * 0.085,
+                  height: 1.45,
+                  fontWeight: FontWeight.w500,
+                ),
+                maxLines: 4,
+              );
+              if ((quoteSource ?? '').isNotEmpty) {
+                _drawText(
+                  canvas,
+                  quoteSource!,
+                  offset: Offset(padding, height - padding * 2.4),
+                  maxWidth: width - padding * 2,
+                  style: TextStyle(color: muted, fontSize: height * 0.045),
+                  maxLines: 1,
+                );
+              }
+            } else {
+              _drawText(
+                canvas,
+                todayMinutes > 0 ? '$todayMinutes' : '0',
+                offset: Offset(padding, padding * 1.4),
+                maxWidth: width - padding * 2,
+                style: TextStyle(
+                  color: ink,
+                  fontSize: height * 0.26,
+                  height: 1.0,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+              );
+              _drawText(
+                canvas,
+                goal > 0 ? '分钟 · 目标 $goal' : '分钟 · 今天',
+                offset: Offset(padding, padding * 1.4 + height * 0.28),
+                maxWidth: width - padding * 2,
+                style: TextStyle(color: muted, fontSize: height * 0.058),
+                maxLines: 1,
+              );
+
+              final dotRadius = height * 0.024;
+              final dotGap = dotRadius * 2 + height * 0.028;
+              final dotsTop = height * 0.62;
+              final maxSeconds = data.week
+                  .map((day) => day.verifiedSeconds ?? 0)
+                  .fold<int>(1, (a, b) => b > a ? b : a);
+              for (var i = 0; i < data.week.length; i++) {
+                final seconds = data.week[i].verifiedSeconds ?? 0;
+                final intensity = seconds == 0 ? 0.18 : 0.35 + 0.65 * (seconds / maxSeconds);
+                canvas.drawCircle(
+                  Offset(padding + dotRadius + i * dotGap, dotsTop),
+                  dotRadius,
+                  Paint()..color = ink.withValues(alpha: intensity.clamp(0.0, 1.0)),
+                );
+              }
+
+              final title = data.currentBook?.title;
+              final chapter = data.currentBook?.chapter ?? '';
+              if (data.showBookDetails && (title?.isNotEmpty ?? false)) {
+                _drawText(
+                  canvas,
+                  [title!, chapter].where((v) => v.isNotEmpty).join(' · '),
+                  offset: Offset(padding, height * 0.72),
+                  maxWidth: width - padding * 2,
+                  style: TextStyle(color: ink, fontSize: height * 0.05),
+                  maxLines: 1,
+                );
+              }
+            }
+
+            final picture = recorder.endRecording();
+            try {
+              final image = await picture.toImage(size.width, size.height);
+              try {
+                final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+                if (bytes == null) {
+                  throw StateError('Unable to encode reading widget card');
+                }
+                return bytes.buffer.asUint8List();
+              } finally {
+                image.dispose();
+              }
+            } finally {
+              picture.dispose();
+            }
+          }
+
+          /// Renders every home-screen family in both appearances, keyed by
+          /// `<size>_<brightness>` so the native extension can pick one.
+          Future<Map<String, Uint8List>> renderReadingDesktopCards(
+            ReadingWidgetSnapshot data,
+          ) async {
+            final images = <String, Uint8List>{};
+            for (final brightness in Brightness.values) {
+              for (final size in ReadingDesktopSize.values) {
+                images['${size.name}_${brightness.name}'] = await renderReadingDesktopCard(
+                  data,
+                  size,
+                  brightness: brightness,
+                  paintQuote: false,
+                );
+              }
+            }
+            return images;
+          }
+
+          void _drawText(
+            Canvas canvas,
+            String text, {
+            required Offset offset,
+            required double maxWidth,
+            required TextStyle style,
+            int maxLines = 1,
+          }) {
+            final builder = ui.ParagraphBuilder(
+              ui.ParagraphStyle(
+                textAlign: TextAlign.left,
+                maxLines: maxLines,
+                ellipsis: '…',
+                fontFamily: style.fontFamily,
+              ),
+            )..pushStyle(
+                ui.TextStyle(
+                  color: style.color,
+                  fontSize: style.fontSize,
+                  height: style.height,
+                  fontWeight: style.fontWeight,
+                ),
+              );
+            builder.addText(text);
+            final paragraph = builder.build()
+              ..layout(ui.ParagraphConstraints(width: maxWidth));
+            canvas.drawParagraph(paragraph, offset);
+            paragraph.dispose();
+          }
+          DART_LIB_READING_WIDGET_REFERENCE_CAPTURE_DART
+
+          cat > lib/reading_widget_skin.dart <<'DART_LIB_READING_WIDGET_SKIN_DART'
+          /// Paper treatments for the home-screen reading widgets.
+          ///
+          /// The reference snapshot did not ship the original skin catalogue, so this
+          /// build provides a small, deterministic palette set. Unknown or legacy ids
+          /// fall back to [original], which keeps stored configurations readable.
+          enum ReadingWidgetSkin {
+            original('原样', '朴素纸面', 0xFFF6F1E7, 0xFF2A2622),
+            seasons('四季', '随季节变换的纸色', 0xFFEDE7D9, 0xFF33302A),
+            spring('春晓', '新叶初生的浅绿', 0xFFE8F0E3, 0xFF2C3A2A),
+            summer('夏夜', '沉入夜色的深青', 0xFF1E2A2E, 0xFFE6EFEE),
+            autumn('秋叶', '被晒暖的旧纸', 0xFFF3E4D2, 0xFF3A2B20),
+            winter('冬雪', '安静的冷白', 0xFFEFF2F6, 0xFF2A2F38),
+            glass('玻璃', '半透明的雾面', 0xFFE9EDF2, 0xFF2B3138);
+
+            const ReadingWidgetSkin(this.label, this.description, this.paper, this.ink);
+
+            final String label;
+            final String description;
+
+            /// Base paper colour (ARGB) used by previews and rendered cards.
+            final int paper;
+
+            /// Base ink colour (ARGB) used by previews and rendered cards.
+            final int ink;
+
+            static ReadingWidgetSkin fromId(String? value) =>
+                values.where((skin) => skin.name == value).firstOrNull ?? original;
+          }
+
+          /// Clamps a stored daily reading goal to the supported range.
+          ///
+          /// `0` means "no goal". Values outside 1–1440 minutes are treated as no goal so
+          /// a corrupt preference can never break the widget surface.
+          int readingDailyGoal(int? minutes) {
+            if (minutes == null || minutes <= 0 || minutes > 1440) return 0;
+            return minutes;
+          }
+          DART_LIB_READING_WIDGET_SKIN_DART
+
+          cat > lib/reading_widget_skin_picker.dart <<'DART_LIB_READING_WIDGET_SKIN_PICKER_DART'
+          import 'package:flutter/material.dart';
+
+          import 'reading_widget_reference.dart';
+          import 'reading_widget_skin.dart';
+          import 'reading_widget_snapshot.dart';
+
+          /// Horizontal skin chooser for the widget editor.
+          ///
+          /// Every entry renders the caller's live preview, so paper treatments are
+          /// compared on real content instead of abstract swatches.
+          class ReadingWidgetSkinPicker extends StatelessWidget {
+            const ReadingWidgetSkinPicker({
+              super.key,
+              required this.previewBuilder,
+              required this.value,
+              required this.size,
+              required this.snapshot,
+              required this.onChanged,
+            });
+
+            final Widget Function(ReadingWidgetSkin skin) previewBuilder;
+            final ReadingWidgetSkin value;
+            final ReadingDesktopSize size;
+            final ReadingWidgetSnapshot snapshot;
+            final ValueChanged<ReadingWidgetSkin>? onChanged;
+
+            @override
+            Widget build(BuildContext context) {
+              final scheme = Theme.of(context).colorScheme;
+              return SizedBox(
+                height: 168,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: ReadingWidgetSkin.values.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 12),
+                  itemBuilder: (context, index) {
+                    final skin = ReadingWidgetSkin.values[index];
+                    final selected = skin == value;
+                    return Semantics(
+                      button: true,
+                      selected: selected,
+                      label: '${skin.label}：${skin.description}',
+                      child: GestureDetector(
+                        onTap: onChanged == null ? null : () => onChanged!(skin),
+                        child: SizedBox(
+                          width: 132,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 180),
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                      color: selected ? scheme.primary : Colors.transparent,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(14),
+                                    child: FittedBox(
+                                      fit: BoxFit.cover,
+                                      child: SizedBox(
+                                        width: size.width.toDouble(),
+                                        height: size.height.toDouble(),
+                                        child: IgnorePointer(
+                                          child: previewBuilder(skin),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                skin.label,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                                  color: selected ? scheme.primary : scheme.onSurface,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            }
+          }
+          DART_LIB_READING_WIDGET_SKIN_PICKER_DART
+
+          cat > lib/main.dart <<'DART_LIB_MAIN_DART'
+          import 'dart:async';
+
+          import 'package:flutter/foundation.dart';
+          import 'package:flutter/material.dart';
+          import 'package:flutter_localizations/flutter_localizations.dart';
+          import 'package:flutter/services.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          import 'app_ui.dart';
+          import 'app_interactions.dart';
+          import 'app_window_insets.dart';
+          import 'app_licenses.dart';
+          import 'app_repository.dart';
+          import 'catalog.dart';
+          import 'legacy_wenku_repository.dart';
+          import 'library_state.dart';
+          import 'local_platform.dart';
+          import 'local_series_actions.dart';
+          import 'listening/audio_output.dart';
+          import 'listening/cache.dart';
+          import 'listening/controller.dart';
+          import 'listening/store.dart';
+          import 'listening/custom_tts.dart';
+          import 'listening/widgets.dart';
+          import 'native_effects.dart';
+          import 'network_status.dart';
+          import 'offline_repository.dart';
+          import 'pages.dart';
+          import 'performance_preferences.dart';
+          import 'haptic_preferences.dart';
+          import 'touch_sampling.dart';
+          import 'updates/app_updates.dart';
+          import 'updates/ios_update_platform.dart';
+          import 'updates/harmony_update_platform.dart';
+          import 'updates/update_page.dart';
+          import 'wenku_account.dart';
+          import 'wenku_features.dart';
+          import 'wenku_shelf_sync.dart';
+          import 'publication_catalog.dart';
+          import 'lan_reading_sync.dart';
+          import 'lan_handoff_widgets.dart';
+          import 'reader_handoff_navigation.dart';
+          import 'reader_appearance.dart';
+          import 'reader_illustrations.dart';
+          import 'app_palette.dart';
+          import 'book_open_monitor.dart';
+          import 'reading_widget_controller.dart';
+          import 'reading_widget_cards.dart';
+          import 'reading_widget_settings_page.dart';
+          import 'bookmark_library_page.dart';
+          import 'reading_statistics_page.dart';
+          import 'reading_moments_ui.dart';
+
+          Future<void> main() async {
+            final binding = WidgetsFlutterBinding.ensureInitialized();
+            registerAppLicenses();
+            TouchSamplingPolicy(binding);
+            // Do not hold the first frame while Android is applying window insets.
+            unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+            final state = await LibraryState.load();
+            if (state.appPalette.source == AppPaletteSource.system ||
+                !state.appPalette.themedIcon) {
+              await state.refreshSystemPalette();
+            }
+            if (chineseLocale(
+                  state.language.locale ?? binding.platformDispatcher.locale,
+                ).countryCode !=
+                'CN') {
+              await ChineseText.prepare();
+            }
+            await state.loadFonts();
+            final network = NetworkStatus();
+            await network.start();
+            if (state.performance.needsRuntimeEffects) await NativeEffects.prepare();
+            final brightness = switch (state.theme) {
+              ThemeMode.light => Brightness.light,
+              ThemeMode.dark => Brightness.dark,
+              ThemeMode.system =>
+                WidgetsBinding.instance.platformDispatcher.platformBrightness,
+            };
+            SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
+            final WenkuAccount? account = LocalPlatform.fileActions
+                ? WenkuAccount()
+                : null;
+            const remote = LegacyWenkuRepository();
+            final repository = LocalPlatform.fileActions
+                ? await openApplicationLibrary(remote: remote, network: network)
+                : const DemoNovelRepository();
+            if (repository is OfflineNovelRepository) {
+              ReaderIllustrationCache.shared.offlineReader =
+                  repository.cache.readIllustration;
+            }
+            if (repository is OfflineNovelRepository && repository.local != null) {
+              await reconcileLocalSeries(repository.local!, state);
+            }
+            final features = account != null
+                ? WenkuFeatures(
+                    account: account,
+                    // The authenticated novellist response already contains book metadata.
+                    // Reuse its adapter, pagination and the existing account session.
+                    publications: remote as PublicationCatalog,
+                    shelfSync: WenkuShelfSync(
+                      account: account,
+                      library: state,
+                      preferences: await SharedPreferences.getInstance(),
+                      network: network,
+                    )..start(),
+                  )
+                : null;
+            final customSpeech = LocalPlatform.listening ? CustomSpeechSettings() : null;
+            await customSpeech?.load();
+            final listening = LocalPlatform.listening
+                ? ListeningController(
+                    repository: repository,
+                    audio: await SpeechAudioCache.forApp(
+                      customSpeech: customSpeech,
+                      network: network,
+                    ),
+                    customSpeech: customSpeech,
+                    store: ListeningStore(await SharedPreferences.getInstance()),
+                    outputFactory: createListeningOutput,
+                  )
+                : null;
+            runApp(
+              NovelApp(
+                state: state,
+                repository: repository,
+                features: features,
+                listening: listening,
+                network: network,
+                updates: defaultTargetPlatform == TargetPlatform.android
+                    ? AppUpdates(preferences: await SharedPreferences.getInstance())
+                    : LocalPlatform.ios
+                    ? AppUpdates(
+                        preferences: await SharedPreferences.getInstance(),
+                        platform: IOSUpdatePlatform(),
+                        packageUpdates: false,
+                        notificationAssetExtension: '.ipa',
+                      )
+                    : LocalPlatform.harmony
+                    ? AppUpdates(
+                        preferences: await SharedPreferences.getInstance(),
+                        platform: HarmonyUpdatePlatform(),
+                        packageUpdates: false,
+                        notificationAssetExtension: '.hap',
+                      )
+                    : null,
+              ),
+            );
+            if (listening != null) {
+              // Register media commands without allocating a player or blocking the first
+              // frame. A service-created engine also gets a handler, with no auto-play.
+              unawaited(prepareListeningService(listening).catchError((Object _) {}));
+            }
+            if (features != null) unawaited(features.account.initialize());
+          }
+
+          class NovelApp extends StatefulWidget {
+            const NovelApp({
+              super.key,
+              required this.state,
+              required this.repository,
+              this.features,
+              this.listening,
+              this.updates,
+              this.network,
+            });
+
+            final LibraryState state;
+            final NovelRepository repository;
+            final WenkuFeatures? features;
+            final ListeningController? listening;
+            final AppUpdates? updates;
+            final NetworkStatus? network;
+            @override
+            State<NovelApp> createState() => _NovelAppState();
+          }
+
+          class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
+            LibraryState get state => widget.state;
+            NovelRepository get repository => widget.repository;
+            WenkuFeatures? get features => widget.features;
+            ListeningController? get listening => widget.listening;
+            AppUpdates? get updates => widget.updates;
+            final _updateNavigation = AppUpdateNavigation();
+            final _navigator = GlobalKey<NavigatorState>();
+            final _home = GlobalKey<HomeShellState>();
+            final _readerHandoff = ReaderHandoffNavigation();
+            late ReadingWidgetController _readingWidgets =
+                ReadingWidgetController.forState(state);
+            late ReadingWidgetCards _widgetCards = ReadingWidgetCards.forState(state);
+            bool _startupWidgetReady = false, _widgetRouteQueued = false;
+            String? _widgetDestination;
+            String? _activeWidgetConfiguration;
+            bool _returningFromWidgetConfiguration = false;
+            late String _lastTypeface = state.appFontId;
+            Locale _systemLocale = chineseLocale(
+              WidgetsBinding.instance.platformDispatcher.locale,
+            );
+            bool _startupReadingConsumed = false;
+            bool _startupInboxReady = false, _startupUpdatesReady = false;
+            bool _startupReadingQueued = false;
+            @override
+            void initState() {
+              super.initState();
+              WidgetsBinding.instance.addObserver(this);
+              state.settingsChanges.addListener(_orientationChanged);
+              _orientationChanged();
+              _startupReadingConsumed = !state.openRecentOnLaunch;
+              _updateNavigation.addListener(_queueStartupReading);
+              updates?.addListener(_queueStartupReading);
+              if (!_startupReadingConsumed) unawaited(_prepareStartupReading());
+              unawaited(_prepareLanSync());
+              unawaited(
+                _readingWidgets.attach().then((_) {
+                  if (mounted) return _widgetCards.attach();
+                }),
+              );
+              unawaited(_prepareReadingWidgets());
+            }
+
+            Future<void> _prepareReadingWidgets() async {
+              try {
+                await ReadingWidgetBridge.start(_readingWidgetRequested);
+              } on PlatformException {
+                // A widget inbox failure does not block normal startup or file opening.
+              } finally {
+                if (mounted) {
+                  setState(() => _startupWidgetReady = true);
+                  _queueStartupReading();
+                  _queueReadingWidgetRoute();
+                }
+              }
+            }
+
+            void _readingWidgetRequested(String destination) {
+              _startupReadingConsumed = true;
+              _widgetDestination = destination;
+              _queueReadingWidgetRoute();
+            }
+
+            void _queueReadingWidgetRoute() {
+              if (!mounted || _widgetDestination == null || _widgetRouteQueued) return;
+              _widgetRouteQueued = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _widgetRouteQueued = false;
+                if (!mounted || _widgetDestination == null) return;
+                final lifecycle = WidgetsBinding.instance.lifecycleState;
+                if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+                final context = _navigator.currentState?.overlay?.context;
+                if (context == null) {
+                  _queueReadingWidgetRoute();
+                  return;
+                }
+                final destination = _widgetDestination!;
+                _widgetDestination = null;
+                if (destination.startsWith('configure:')) {
+                  unawaited(_configureWidget(context, destination.substring(10)));
+                } else if (destination == 'excerpts') {
+                  unawaited(
+                    pushNovelPage<void>(
+                      context,
+                      BookmarkLibraryPage(state: state, repository: repository),
+                      reduceMotion: state.reduceMotion,
+                      slot: ('reading-widget', destination),
+                    ),
+                  );
+                } else if (destination == 'continue') {
+                  unawaited(_continueFromWidget(context));
+                } else if (destination == 'moments') {
+                  unawaited(
+                    showReadingMomentsHistory(
+                      context,
+                      store: state.readingMoments,
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  );
+                } else {
+                  unawaited(
+                    pushNovelPage<void>(
+                      context,
+                      ReadingStatisticsPage(state: state, repository: repository),
+                      reduceMotion: state.reduceMotion,
+                      slot: ('reading-widget', destination),
+                    ),
+                  );
+                }
+              });
+              WidgetsBinding.instance.ensureVisualUpdate();
+            }
+
+            Future<void> _configureWidget(BuildContext context, String id) async {
+              if (_activeWidgetConfiguration == id) return;
+              setState(() => _activeWidgetConfiguration = id);
+              final confirmed = await pushNovelPage<bool>(
+                context,
+                ReadingWidgetSettingsPage(state: state, bindTo: id),
+                reduceMotion: state.reduceMotion,
+                slot: ('reading-widget-configuration', id),
+              );
+              if (!mounted) return;
+              if (!LocalPlatform.android) {
+                setState(() => _activeWidgetConfiguration = null);
+                return;
+              }
+              _returningFromWidgetConfiguration = true;
+              try {
+                await ReadingWidgetBridge.channel.invokeMethod<void>(
+                  'completeConfiguration',
+                  {'widgetId': id, 'confirmed': confirmed == true},
+                );
+              } on PlatformException {
+                _returningFromWidgetConfiguration = false;
+                if (context.mounted) showNovelFeedback(context, '桌面配置未能完成，请重新添加');
+              } finally {
+                if (mounted) setState(() => _activeWidgetConfiguration = null);
+              }
+            }
+
+            Future<void> _continueFromWidget(BuildContext context) async {
+              final id = state.readingHistoryIds.firstOrNull;
+              if (id == null) {
+                _navigator.currentState?.popUntil((route) => route.isFirst);
+                _home.currentState?.openShelf();
+                return;
+              }
+              final book =
+                  state.cachedNovel(id) ??
+                  Novel(
+                    id: id,
+                    title: '书籍 $id',
+                    author: '',
+                    genre: '',
+                    summary: '',
+                    colors: const [Colors.grey, Colors.black],
+                  );
+              final position = state.positionFor(id);
+              final page = ReaderLoaderPage(
+                novel: book,
+                state: state,
+                repository: repository,
+              );
+              try {
+                if (position != null && _readerHandoff.hasReader) {
+                  await _readerHandoff.open(
+                    bookId: id,
+                    position: position,
+                    page: page,
+                    reduceMotion: state.reduceMotion,
+                  );
+                } else {
+                  // The route slot also deduplicates taps while the catalogue is loading.
+                  unawaited(
+                    pushNovelPage<void>(
+                      context,
+                      page,
+                      reduceMotion: state.reduceMotion,
+                      slot: ('widget-reading', id),
+                    ),
+                  );
+                }
+              } catch (_) {
+                if (context.mounted) showNovelFeedback(context, '书页暂未打开，请重试');
+              }
+            }
+
+            Future<void> _prepareStartupReading() async {
+              final service = updates;
+              try {
+                await service?.loadInstalled();
+              } catch (_) {
+                // Installed-version metadata must not prevent an otherwise usable reader.
+              }
+              if (!mounted || !identical(service, updates)) return;
+              _startupUpdatesReady = true;
+              _queueStartupReading();
+            }
+
+            void _initialBookInboxSettled(bool hadRequest) {
+              if (_startupReadingConsumed) return;
+              _startupInboxReady = true;
+              if (hadRequest) {
+                // A system file-open is the user's explicit launch destination.
+                _bookOpenRequested();
+                return;
+              }
+              _queueStartupReading();
+            }
+
+            void _bookOpenRequested() {
+              // Warm file intents can arrive while release notes are delaying startup.
+              _startupReadingConsumed = true;
+            }
+
+            void _queueStartupReading() {
+              if (!mounted || _startupReadingConsumed || _startupReadingQueued) return;
+              if (_updateNavigation.hasPageBeyondRoot) {
+                _startupReadingConsumed = true;
+                return;
+              }
+              _startupReadingQueued = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _startupReadingQueued = false;
+                if (!mounted || _startupReadingConsumed) return;
+                if (!state.openRecentOnLaunch || _updateNavigation.hasPageBeyondRoot) {
+                  _startupReadingConsumed = true;
+                  return;
+                }
+                final lifecycle = WidgetsBinding.instance.lifecycleState;
+                if (!_startupInboxReady ||
+                    !_startupWidgetReady ||
+                    !_startupUpdatesReady ||
+                    lifecycle != null && lifecycle != AppLifecycleState.resumed ||
+                    !_updateNavigation.rootReady ||
+                    updates?.shouldShowReleaseNotes == true) {
+                  return;
+                }
+                _startupReadingConsumed = true;
+                final id = state.readingHistoryIds.firstOrNull;
+                if (id == null) return;
+                final book =
+                    state.cachedNovel(id) ??
+                    Novel(
+                      id: id,
+                      title: '书籍 $id',
+                      author: '',
+                      genre: '',
+                      summary: '',
+                      colors: const [Colors.grey, Colors.black],
+                    );
+                unawaited(
+                  pushNovelPage<void>(
+                    _navigator.currentState!.overlay!.context,
+                    ReaderLoaderPage(novel: book, state: state, repository: repository),
+                    reduceMotion: state.reduceMotion,
+                    slot: ('startup-reading', id),
+                  ),
+                );
+              });
+              WidgetsBinding.instance.ensureVisualUpdate();
+            }
+
+            bool? _portraitApplied;
+            void _orientationChanged() {
+              if (!LocalPlatform.readerAppearance) return;
+              final force = state.forcePortrait;
+              if (_portraitApplied == force) return;
+              _portraitApplied = force;
+              unawaited(
+                SystemChrome.setPreferredOrientations(
+                  force
+                      ? [DeviceOrientation.portraitUp]
+                      // Flutter-OH maps an empty list to UNSPECIFIED, which leaves the
+                      // main window portrait. All four enables system-lock-aware rotation.
+                      : LocalPlatform.harmony
+                      ? DeviceOrientation.values
+                      : [],
+                ),
+              );
+            }
+
+            @override
+            void didUpdateWidget(NovelApp oldWidget) {
+              super.didUpdateWidget(oldWidget);
+              if (oldWidget.state != state) {
+                _widgetCards.dispose();
+                _widgetCards = ReadingWidgetCards.forState(state);
+                unawaited(_widgetCards.attach());
+                _readingWidgets.dispose();
+                _readingWidgets = ReadingWidgetController.forState(state);
+                unawaited(_readingWidgets.attach());
+                _startupReadingConsumed = true;
+                oldWidget.state.settingsChanges.removeListener(_orientationChanged);
+                state.settingsChanges.addListener(_orientationChanged);
+                _portraitApplied = null;
+                _orientationChanged();
+              }
+              if (oldWidget.updates != updates) {
+                oldWidget.updates?.removeListener(_queueStartupReading);
+                updates?.addListener(_queueStartupReading);
+                if (!_startupReadingConsumed) {
+                  _startupUpdatesReady = false;
+                  unawaited(_prepareStartupReading());
+                }
+              }
+            }
+
+            LanReadingSync? _lanSync;
+            Future<void> _openLocalBook(Novel book) async {
+              final position =
+                  state.positionFor(book.id) ??
+                  ReadingPosition(
+                    chapter: 0,
+                    chapterId: book.chapters.firstOrNull?.id ?? 0,
+                    offset: 0,
+                    fraction: 0,
+                    fontSize: state.readerFontSizeFor(book.id),
+                    width: 0,
+                    updatedAt: DateTime.now().millisecondsSinceEpoch,
+                  );
+              await _readerHandoff.open(
+                bookId: book.id,
+                position: position,
+                page: ReaderPage(
+                  novel: book,
+                  state: state,
+                  repository: repository,
+                  initialChapter: position.chapter,
+                  initialPosition: position,
+                  directEntry: true,
+                ),
+                reduceMotion: state.reduceMotion,
+              );
+            }
+
+            Future<void> _continueNearbyBook(LanHandoffReceipt receipt) async {
+              final context = _navigator.currentState?.overlay?.context;
+              if (context == null || !context.mounted) {
+                throw const FormatException('阅读器暂未准备好，请重试');
+              }
+              final handoff = _lanSync?.handoff;
+              if (handoff == null) {
+                throw const FormatException('局域网续读暂未准备好，请重试');
+              }
+              final resolved = await handoff.resolveReceipt(receipt);
+              if (!mounted || !context.mounted || !identical(handoff.received, receipt)) {
+                throw const FormatException('续读提醒已更新，请重新选择');
+              }
+              final book = resolved.book;
+              await state.rememberNovel(book);
+              if (!mounted || !context.mounted || !identical(handoff.received, receipt)) {
+                return;
+              }
+              await _readerHandoff.open(
+                bookId: book.id,
+                position: resolved.position,
+                reuseCurrentReader: receipt.online == null,
+                page: ReaderPage(
+                  novel: book,
+                  state: state,
+                  repository: repository,
+                  initialChapter: resolved.position.chapter,
+                  initialPosition: resolved.position,
+                  directEntry: true,
+                ),
+                reduceMotion: state.reduceMotion,
+              );
+              if (identical(_lanSync?.handoff?.received, receipt)) {
+                _lanSync?.handoff?.dismissReceipt();
+              }
+            }
+
+            Widget _nearbyNotice(Widget notice) => AnimatedBuilder(
+              animation: _readerHandoff,
+              child: notice,
+              builder: (context, child) {
+                final id = _readerHandoff.currentBookId;
+                return id == null
+                    ? child!
+                    : ReaderAppearance(
+                        state: state,
+                        appTheme: Theme.of(context),
+                        bookId: id,
+                        child: child!,
+                      );
+              },
+            );
+
+            Future<void> _prepareLanSync() async {
+              if (!LocalPlatform.nearbyReading || repository is! OfflineNovelRepository) {
+                return;
+              }
+              final sync = LanReadingSync(
+                state: state,
+                preferences: await SharedPreferences.getInstance(),
+                books: (repository as OfflineNovelRepository).local,
+                repository: repository,
+              );
+              if (!mounted) {
+                sync.dispose();
+                return;
+              }
+              setState(() => _lanSync = sync);
+              await sync.initialize();
+            }
+
+            @override
+            Future<void> didChangeLocales(List<Locale>? locales) async {
+              final ticket = ++_localeRequest;
+              final next = chineseLocale(locales?.firstOrNull);
+              if (state.language == AppLanguage.system && next.countryCode != 'CN') {
+                await ChineseText.prepare();
+              }
+              if (mounted && ticket == _localeRequest) {
+                setState(() => _systemLocale = next);
+              }
+            }
+
+            int _localeRequest = 0;
+
+            Object? _themeKey;
+            final _themes = <Brightness, ThemeData>{};
+            ThemeData _theme(Brightness brightness) {
+              final key = (
+                defaultTargetPlatform,
+                state.appFontId,
+                state.appPalette.source,
+                state.appPalette.seed,
+                state.systemTonalColors?.signature,
+              );
+              if (_themeKey != key) {
+                _themeKey = key;
+                _themes.clear();
+              }
+              return _themes.putIfAbsent(
+                brightness,
+                () => novelTheme(
+                  brightness,
+                  fontFamily: state.appFontFamily,
+                  palette: state.appPalette,
+                  systemColors: state.systemTonalColors,
+                ),
+              );
+            }
+
+            @override
+            void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+              if (_returningFromWidgetConfiguration &&
+                  (lifecycle == AppLifecycleState.paused ||
+                      lifecycle == AppLifecycleState.hidden ||
+                      lifecycle == AppLifecycleState.resumed)) {
+                setState(() => _returningFromWidgetConfiguration = false);
+              }
+              if (lifecycle == AppLifecycleState.resumed) _queueStartupReading();
+              if (lifecycle == AppLifecycleState.resumed) _queueReadingWidgetRoute();
+              // The reader settles its final eligible interval in this same lifecycle
+              // dispatch. Publish on the next event turn, after its ledger microtasks.
+              if (lifecycle == AppLifecycleState.resumed ||
+                  lifecycle == AppLifecycleState.paused ||
+                  lifecycle == AppLifecycleState.inactive ||
+                  lifecycle == AppLifecycleState.hidden) {
+                unawaited(Future<void>.delayed(Duration.zero, _readingWidgets.publish));
+              }
+              if (lifecycle == AppLifecycleState.resumed &&
+                  state.appPalette.source == AppPaletteSource.system) {
+                unawaited(state.refreshSystemPalette());
+              }
+            }
+
+            @override
+            void dispose() {
+              _widgetCards.dispose();
+              state.settingsChanges.removeListener(_orientationChanged);
+              WidgetsBinding.instance.removeObserver(this);
+              features?.shelfSync?.dispose();
+              _updateNavigation.dispose();
+              updates?.removeListener(_queueStartupReading);
+              _readerHandoff.dispose();
+              _lanSync?.dispose();
+              _readingWidgets.dispose();
+              ReadingWidgetBridge.stop();
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return AnimatedBuilder(
+                animation: state.applicationChanges,
+                builder: (context, child) {
+                  final typefaceChanged = _lastTypeface != state.appFontId;
+                  _lastTypeface = state.appFontId;
+                  return MaterialApp(
+                    navigatorKey: _navigator,
+                    title: '轻小说文库',
+                    locale: state.language.locale ?? _systemLocale,
+                    supportedLocales: const [
+                      Locale('zh', 'CN'),
+                      Locale('zh', 'HK'),
+                      Locale('zh', 'TW'),
+                    ],
+                    localizationsDelegates: GlobalMaterialLocalizations.delegates,
+                    localeResolutionCallback: (locale, _) =>
+                        chineseLocale(state.language.locale ?? locale),
+                    navigatorObservers: [_updateNavigation, _readerHandoff],
+                    debugShowCheckedModeBanner: false,
+                    scrollBehavior: const NovelScrollBehavior(),
+                    theme: _theme(Brightness.light),
+                    darkTheme: _theme(Brightness.dark),
+                    themeMode: state.theme,
+                    themeAnimationDuration:
+                        typefaceChanged ||
+                            state.effectiveReduceMotion ||
+                            (MediaQuery.maybeOf(context)?.disableAnimations ?? false)
+                        ? Duration.zero
+                        : NovelMotion.enter,
+                    themeAnimationCurve: NovelMotion.ease,
+                    builder: (context, child) => AppWindowInsets(
+                      child: Builder(
+                        builder: (context) {
+                          final media = MediaQuery.of(context);
+                          final content = PerformanceScope(
+                            preferences: state.performance,
+                            explicitReduceMotion:
+                                media.disableAnimations || state.reduceMotion,
+                            child: MediaQuery(
+                              data: media.copyWith(
+                                disableAnimations:
+                                    media.disableAnimations ||
+                                    state.effectiveReduceMotion,
+                              ),
+                              child: AnnotatedRegion<SystemUiOverlayStyle>(
+                                value: novelSystemUiStyle(Theme.of(context).brightness),
+                                child: AnimatedBuilder(
+                                  animation: state.glassChanges,
+                                  child: child,
+                                  builder: (context, child) => GlassAppearance(
+                                    blur: state.glassBlur,
+                                    opacity: state.glassOpacity,
+                                    child: ListeningScope(
+                                      controller: listening,
+                                      child: LanSyncScope(
+                                        sync: _lanSync,
+                                        child: WenkuFeaturesScope(
+                                          features: features,
+                                          child: ReaderHandoffScope(
+                                            navigation: _readerHandoff,
+                                            child: LanHandoffMonitor(
+                                              handoff: _lanSync?.handoff,
+                                              onContinue: _continueNearbyBook,
+                                              reduceMotion: state.effectiveReduceMotion,
+                                              noticeWrapper: _nearbyNotice,
+                                              child: child!,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                          return HapticScope(
+                            preferences: state.haptics,
+                            child: updates == null
+                                ? content
+                                : AppUpdateMonitor(
+                                    updates: updates!,
+                                    navigation: _updateNavigation,
+                                    promptsEnabled:
+                                        _startupWidgetReady &&
+                                        _activeWidgetConfiguration == null &&
+                                        !_returningFromWidgetConfiguration,
+                                    child: content,
+                                  ),
+                          );
+                        },
+                      ),
+                    ),
+                    // Match detail routes from the first page onward. Mixing Material's
+                    // root route with Cupertino detail routes inserts/removes a delegated
+                    // transition wrapper and reparents the entire retained home subtree.
+                    // Keep Navigator's default initial-route/deep-link fallback logic.
+                    onGenerateRoute: (settings) =>
+                        settings.name == Navigator.defaultRouteName
+                        ? softRoute<void>(
+                            Builder(
+                              builder: (context) {
+                                // A newly attached Android surface can report a zero-sized view.
+                                // Do not create a glass geometry texture until metrics are ready.
+                                if (MediaQuery.sizeOf(context).isEmpty) {
+                                  return const SizedBox.shrink();
+                                }
+                                final home = RepaintBoundary(
+                                  child: HomeShell(
+                                    key: _home,
+                                    state: state,
+                                    repository: repository,
+                                    network: widget.network,
+                                  ),
+                                );
+                                final repo = repository;
+                                if (LocalPlatform.fileActions &&
+                                    repo is OfflineNovelRepository &&
+                                    repo.local != null) {
+                                  return BookOpenMonitor(
+                                    books: repo.local!,
+                                    library: state,
+                                    onOpen: _openLocalBook,
+                                    onInitialInboxSettled: _initialBookInboxSettled,
+                                    onOpenRequested: _bookOpenRequested,
+                                    child: home,
+                                  );
+                                }
+                                _initialBookInboxSettled(false);
+                                return home;
+                              },
+                            ),
+                            settings: settings,
+                          )
+                        : null,
+                  );
+                },
+              );
+            }
+          }
+          DART_LIB_MAIN_DART
+
+      - name: Strip App Groups entitlements
+        if: ${{ inputs.strip_app_groups }}
+        run: |
+          set -euo pipefail
+          for file in ios/Runner/ReadingWidgets.entitlements ios/ReadingWidgets/ReadingWidgets.entitlements; do
+            if [ -f "$file" ]; then
+              printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+                '<plist version="1.0"><dict/></plist>' > "$file"
+              echo "stripped $file"
+            fi
+          done
+
+      - name: Build unsigned app
+        env:
+          BUILD_NAME: ${{ inputs.build_name }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          args=(--release --no-codesign)
+          if [ -n "$BUILD_NAME" ]; then args+=(--build-name "$BUILD_NAME"); fi
+          if [ -n "$BUILD_NUMBER" ]; then args+=(--build-number "$BUILD_NUMBER"); fi
+          flutter build ios "${args[@]}"
+
+      - name: Package IPA
+        id: package
+        run: |
+          set -euo pipefail
+          version=$(awk '/^version:/ {print $2; exit}' pubspec.yaml)
+          name=${version%%+*}
+          number=${version##*+}
+          if [ "$number" = "$version" ]; then number=1; fi
+          stamp=$(date +%Y%m%d)
+          ipa="Wenku8-${name}-${number}-${stamp}-unsigned.ipa"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry "$ipa" Payload
+          echo "ipa=$ipa" >> "$GITHUB_OUTPUT"
+          ls -lh "$ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wenku8-unsigned-ipa
+          path: ${{ steps.package.outputs.ipa }}
+          if-no-files-found: error
