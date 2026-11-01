@@ -3096,6 +3096,22 @@ jobs:
           }
           DART_LIB_MAIN_DART
 
+      - name: Fill missing assets
+        run: |
+          set -euo pipefail
+          # 公开快照没提交 assets/report/ 和 assets/reading_previews/*.webp，
+          # 但 pubspec.yaml 仍声明它们，缺目录会让 flutter assemble 直接失败。
+          mkdir -p assets/report assets/reading_previews
+          printf 'placeholder\n' > assets/report/placeholder.txt
+          for name in archive shelf editorial constellation signal score ink festival; do
+            src="assets/reading_art/${name}-117.webp"
+            dst="assets/reading_previews/${name}-117.webp"
+            if [ ! -f "$dst" ]; then
+              if [ -f "$src" ]; then cp "$src" "$dst"; else printf 'placeholder\n' > "$dst"; fi
+            fi
+          done
+          ls -1 assets/reading_previews | head -20
+
       - name: Strip App Groups entitlements
         if: ${{ inputs.strip_app_groups }}
         run: |
