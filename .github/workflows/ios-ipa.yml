@@ -3115,10 +3115,19 @@ jobs:
           BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           set -euo pipefail
-          args=(--release --no-codesign)
+          args=(--release --no-codesign --verbose)
           if [ -n "$BUILD_NAME" ]; then args+=(--build-name "$BUILD_NAME"); fi
           if [ -n "$BUILD_NUMBER" ]; then args+=(--build-number "$BUILD_NUMBER"); fi
-          flutter build ios "${args[@]}"
+          mkdir -p "$RUNNER_TEMP/ios-build"
+          ( set -o pipefail; flutter build ios "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/ios-build/build-ios.log" )
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: ${{ runner.temp }}/ios-build/build-ios.log
+          if-no-files-found: warn
 
       - name: Package IPA
         id: package
