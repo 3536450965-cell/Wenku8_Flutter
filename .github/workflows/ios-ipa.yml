@@ -74,6 +74,7 @@ jobs:
       - name: Apply reconstructed modules
         run: |
           set -euo pipefail
+          mkdir -p test/fixtures
           cat > lib/lan_handoff_widgets.dart <<'DART_LIB_LAN_HANDOFF_WIDGETS_DART'
           import 'package:flutter/widgets.dart';
 
