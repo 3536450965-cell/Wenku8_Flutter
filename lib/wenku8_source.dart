@@ -424,6 +424,30 @@ class Wenku8Client {
     caseSensitive: false,
   );
 
+  static final _contentOpen = RegExp(
+    r'<div[^>]*id="content"[^>]*>',
+    caseSensitive: false,
+  );
+
+  static final _divTag = RegExp(r'<div\b[^>]*>|</div\s*>', caseSensitive: false);
+
+  /// 正文按 div 配对切出来：插图章的正文是「图片 div」一个接一个，非贪婪的
+  /// 正则会在第一张图结束后就收尾，导致整章只能拿到一张图。
+  String _contentBody(String html) {
+    final open = _contentOpen.firstMatch(html);
+    if (open != null) {
+      var depth = 1;
+      for (final match in _divTag.allMatches(html, open.end)) {
+        depth += match.group(0)!.startsWith('</') ? -1 : 1;
+        if (depth == 0) return html.substring(open.end, match.start);
+      }
+      return html.substring(open.end);
+    }
+    return _first(html, [
+      RegExp(r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>', dotAll: true),
+    ]);
+  }
+
   /// Reads one chapter page. Illustration pages carry no text at all, so the
   /// image urls are returned alongside the body and fetched separately.
   Future<({String text, List<String> images})> _chapterContent(
@@ -432,10 +456,7 @@ class Wenku8Client {
     String chapterId,
   ) async {
     final html = await _get('/novel/$categoryPath/$bookId/$chapterId.htm');
-    final body = _first(html, [
-      RegExp(r'<div[^>]*id="content"[^>]*>(.*?)</div>', dotAll: true),
-      RegExp(r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>', dotAll: true),
-    ]);
+    final body = _contentBody(html);
     final text = _plain(body);
     final images = <String>[];
     for (final match in _imagePattern.allMatches(body)) {
@@ -446,9 +467,9 @@ class Wenku8Client {
     return (text: text, images: images);
   }
 
-  static const _maxImagesPerChapter = 12;
+  static const _maxImagesPerChapter = 40;
   static const _maxImageBytes = 8 * 1024 * 1024;
-  static const _maxTotalImageBytes = 60 * 1024 * 1024;
+  static const _maxTotalImageBytes = 160 * 1024 * 1024;
 
   Future<List<Wenku8Image>> _chapterImages(
     String chapterId,
@@ -663,9 +684,37 @@ class Wenku8Client {
     final volumeFiles = <List<String>>[];
     final volumeTitles = <String>[];
     final volumeChapters = <List<Wenku8Chapter>>[];
+    // 全书插图按出现顺序编号。正文里的「（插图007）」这类占位符只靠这个号
+    // 才能换回真图：站点在那个位置只发文字，不发 <img>。
+    final orderedShots = <Wenku8Image>[];
+    for (final volume in download.volumes) {
+      for (final chapter in volume.chapters) {
+        orderedShots.addAll(download.images[chapter.id] ?? const <Wenku8Image>[]);
+      }
+    }
+    final registeredShots = <String>{};
+    String figure(Wenku8Image image) {
+      if (registeredShots.add(image.path)) {
+        final id = 'img-${image.path.replaceAll(RegExp('[^A-Za-z0-9]+'), '-')}';
+        imageManifest.writeln(
+          '    <item id="$id" href="${image.path}" '
+          'media-type="${image.mediaType}"/>',
+        );
+        archive.addFile(
+          ArchiveFile('OEBPS/${image.path}', image.bytes.length, image.bytes),
+        );
+      }
+      return '<p class="figure"><img src="${image.path}" alt=""/></p>';
+    }
+
     var index = 0;
     for (final volume in download.volumes) {
       if (volume.chapters.isEmpty) continue;
+      // 占位符编号按「卷」重排：同一本书每一卷都会从 插图001 重新开始。
+      final volumeShots = <Wenku8Image>[];
+      for (final chapter in volume.chapters) {
+        volumeShots.addAll(download.images[chapter.id] ?? const <Wenku8Image>[]);
+      }
       final files = <String>[];
       for (final chapter in volume.chapters) {
         index++;
@@ -677,26 +726,36 @@ class Wenku8Client {
           '    <item id="$path" href="$path" media-type="application/xhtml+xml"/>',
         );
         spine.writeln('    <itemref idref="$path"/>');
-        final paragraphs = body
-            .split('\n')
-            .where((line) => line.trim().isNotEmpty)
-            .map((line) => '<p>${_escape(line.trim())}</p>')
-            .join('\n');
+        final used = <String>{};
+        final paragraphs = <String>[];
+        for (final line in body.split('\n')) {
+          final text = line.trim();
+          if (text.isEmpty) continue;
+          final placeholder = _illustrationPlaceholder.firstMatch(text);
+          if (placeholder != null &&
+              text.replaceAll(_illustrationPlaceholder, '').trim().isEmpty) {
+            final number = int.tryParse(placeholder.group(1)!);
+            Wenku8Image? matched;
+            if (number != null &&
+                number >= 1 &&
+                number <= volumeShots.length) {
+              matched = volumeShots[number - 1];
+            }
+            if (matched != null && used.add(matched.path)) {
+              paragraphs.add(figure(matched));
+              continue;
+            }
+          }
+          paragraphs.add('<p>${_escape(text)}</p>');
+        }
         final figures = StringBuffer();
         for (final image in shots) {
-          final id = 'img-${image.path.replaceAll(RegExp('[^A-Za-z0-9]+'), '-')}';
-          imageManifest.writeln(
-            '    <item id="$id" href="${image.path}" '
-            'media-type="${image.mediaType}"/>',
-          );
-          archive.addFile(
-            ArchiveFile('OEBPS/${image.path}', image.bytes.length, image.bytes),
-          );
-          figures.writeln('<p class="figure"><img src="${image.path}" alt=""/></p>');
+          if (used.contains(image.path)) continue;
+          figures.writeln(figure(image));
         }
         add('OEBPS/$path', _xhtml(chapter.title, '''
 <h1>${_escape(chapter.title)}</h1>
-$paragraphs
+${paragraphs.join('\n')}
 $figures'''));
       }
       volumeFiles.add(files);
@@ -876,3 +935,8 @@ $body
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;');
 }
+
+/// 站点正文里用文字代替插图，例如「（插图007）」「(插图7)」「【插图11】」。
+final RegExp _illustrationPlaceholder = RegExp(
+  r'^[（(【\[]\s*插\s*[图圖]\s*0*(\d{1,3})\s*[)）】\]]$',
+);
