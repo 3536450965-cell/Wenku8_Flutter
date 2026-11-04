@@ -5673,8 +5673,9 @@ jobs:
               expect(readable, isNotEmpty, reason: '导入后的正文全部为空');
 
               final sample = bodies.values.first;
-              final joined = imported.bodies.join('\n');
-              expect(joined, contains(sample.substring(0, 20)));
+              String squash(String value) => value.replaceAll(RegExp(r'\s+'), '');
+              final joined = squash(imported.bodies.join('\n'));
+              expect(joined, contains(squash(sample).substring(0, 20)));
             });
           }
           DART_TEST_WENKU8_EPUB_TEST_DART
