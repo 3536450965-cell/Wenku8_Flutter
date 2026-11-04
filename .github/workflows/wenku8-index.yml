@@ -28,6 +28,22 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Probe the site from this runner
+        run: |
+          for host in https://www.wenku8.cc https://www.wenku8.net; do
+            for path in /book/4499.htm /book/3330.htm; do
+              out="/tmp/p_$(echo "$host$path" | tr -c 'a-zA-Z0-9' '_').htm"
+              code=$(curl -sS -m 20 -o "$out" -w '%{http_code}' -A 'Mozilla/5.0' "$host$path" 2>/tmp/err.txt) || code="curl-fail"
+              bytes=$(wc -c < "$out" 2>/dev/null || echo 0)
+              echo "GET $host$path -> http=$code bytes=$bytes err=$(head -c 80 /tmp/err.txt 2>/dev/null | tr '\n' ' ')"
+              if [ "$bytes" != "0" ]; then
+                echo -n '  body: '
+                head -c 160 "$out" | iconv -f gbk -t utf-8 2>/dev/null | tr '\n' ' ' || true
+                echo
+              fi
+            done
+          done
+          true
       - name: Look for new books
         run: node tools/index_crawl.mjs
 
