@@ -2682,8 +2682,15 @@ jobs:
                 await file.delete().catchError((_) => file);
                 widget.onImported?.call(novel);
                 if (!mounted) return;
+                final skipped = download.skipped.length;
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('已导入《${novel.title}》')),
+                  SnackBar(
+                    content: Text(
+                      skipped == 0
+                          ? '已导入《${novel.title}》'
+                          : '已导入《${novel.title}》，跳过 $skipped 节空章节',
+                    ),
+                  ),
                 );
                 Navigator.of(context).pop(true);
               } catch (error) {
@@ -2900,16 +2907,49 @@ jobs:
 
           /// A fully scraped book, ready to be turned into an epub.
           class Wenku8Download {
-            Wenku8Download(this.book, this.volumes, this.chapters);
+            Wenku8Download(
+              this.book,
+              this.volumes,
+              this.chapters, {
+              this.images = const {},
+              this.skipped = const [],
+            });
 
             final Wenku8Book book;
             final List<Wenku8Volume> volumes;
 
-            /// Chapter bodies in reading order, keyed by chapter id.
+            /// Chapter bodies in reading order, keyed by chapter id. Illustration pages
+            /// have an empty body and carry their pictures in [images] instead.
             final Map<String, String> chapters;
+
+            /// Illustration bytes per chapter id, already ordered for display.
+            final Map<String, List<Wenku8Image>> images;
+
+            /// Chapters the site served without any readable text or picture.
+            final List<String> skipped;
 
             int get characterCount =>
                 chapters.values.fold(0, (sum, body) => sum + body.length);
+
+            int get imageCount =>
+                images.values.fold(0, (sum, list) => sum + list.length);
+          }
+
+          /// One illustration belonging to a chapter.
+          class Wenku8Image {
+            const Wenku8Image(this.path, this.bytes);
+
+            /// Path inside the epub, for example `images/c125425-1.jpg`.
+            final String path;
+            final Uint8List bytes;
+
+            String get mediaType {
+              final lower = path.toLowerCase();
+              if (lower.endsWith('.png')) return 'image/png';
+              if (lower.endsWith('.gif')) return 'image/gif';
+              if (lower.endsWith('.webp')) return 'image/webp';
+              return 'image/jpeg';
+            }
           }
 
           class Wenku8Client {
@@ -3149,7 +3189,14 @@ jobs:
               throw Wenku8Exception('无法确定这本书的分类，可能已下架。');
             }
 
-            Future<String> _chapterText(
+            static final _imagePattern = RegExp(
+              r'<img[^>]+src="([^"]+)"',
+              caseSensitive: false,
+            );
+
+            /// Reads one chapter page. Illustration pages carry no text at all, so the
+            /// image urls are returned alongside the body and fetched separately.
+            Future<({String text, List<String> images})> _chapterContent(
               String categoryPath,
               String bookId,
               String chapterId,
@@ -3160,8 +3207,89 @@ jobs:
                 RegExp(r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>', dotAll: true),
               ]);
               final text = _plain(body);
-              if (text.isEmpty) throw Wenku8Exception('第 $chapterId 节正文为空。');
-              return text;
+              final images = <String>[];
+              for (final match in _imagePattern.allMatches(body)) {
+                final url = match.group(1);
+                if (url == null || !url.startsWith('http')) continue;
+                if (!images.contains(url)) images.add(url);
+              }
+              return (text: text, images: images);
+            }
+
+            static const _maxImagesPerChapter = 12;
+            static const _maxImageBytes = 8 * 1024 * 1024;
+            static const _maxTotalImageBytes = 60 * 1024 * 1024;
+
+            Future<List<Wenku8Image>> _chapterImages(
+              String chapterId,
+              List<String> urls,
+            ) async {
+              final result = <Wenku8Image>[];
+              var total = 0;
+              for (var index = 0; index < urls.length; index++) {
+                if (index >= _maxImagesPerChapter) break;
+                try {
+                  final bytes = await _getImage(urls[index]);
+                  if (bytes.length > _maxImageBytes) continue;
+                  total += bytes.length;
+                  if (total > _maxTotalImageBytes) break;
+                  final ext = _imageExtension(urls[index]);
+                  result.add(Wenku8Image('images/c$chapterId-$index$ext', bytes));
+                } on Wenku8Exception {
+                  // A missing picture should not abort the whole book.
+                  continue;
+                }
+                await Future<void>.delayed(const Duration(milliseconds: 160));
+              }
+              return result;
+            }
+
+            static String _imageExtension(String url) {
+              final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+              for (final ext in const ['.jpg', '.jpeg', '.png', '.gif', '.webp']) {
+                if (path.endsWith(ext)) return ext == '.jpeg' ? '.jpg' : ext;
+              }
+              return '.jpg';
+            }
+
+            Future<Uint8List> _getImage(String url) async {
+              Object? lastError;
+              for (var attempt = 0; attempt < 4; attempt++) {
+                try {
+                  final client = await _http();
+                  final origin = _origin ?? _origins.first;
+                  final request = await client.getUrl(Uri.parse(url));
+                  request.headers.set(HttpHeaders.userAgentHeader, userAgent);
+                  request.headers.set(HttpHeaders.refererHeader, '$origin/');
+                  request.headers.set(
+                    HttpHeaders.acceptHeader,
+                    'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                  );
+                  request.headers.set(HttpHeaders.acceptEncodingHeader, 'gzip, deflate');
+                  final response = await request.close().timeout(timeout);
+                  if (response.statusCode != 200) {
+                    await response.drain<void>();
+                    lastError = Wenku8Exception('插图返回 ${response.statusCode}');
+                    await Future<void>.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+                    continue;
+                  }
+                  final bytes = await response
+                      .fold<BytesBuilder>(BytesBuilder(copy: false), (b, c) => b..add(c))
+                      .timeout(timeout);
+                  return Uint8List.fromList(
+                    _inflate(
+                      bytes.takeBytes(),
+                      response.headers.value(HttpHeaders.contentEncodingHeader),
+                    ),
+                  );
+                } catch (error) {
+                  lastError = error;
+                  _client?.close(force: true);
+                  _client = null;
+                  await Future<void>.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+                }
+              }
+              throw Wenku8Exception('插图下载失败：${_reason(lastError)}');
             }
 
             /// Downloads [volumes] one chapter at a time.
@@ -3174,15 +3302,48 @@ jobs:
               final category = await _categoryPath(book.id);
               final all = [for (final volume in volumes) ...volume.chapters];
               final bodies = <String, String>{};
+              final images = <String, List<Wenku8Image>>{};
+              final skipped = <String>[];
               for (var index = 0; index < all.length; index++) {
                 if (isCancelled?.call() ?? false) throw Wenku8Exception('已取消。');
                 final entry = all[index];
-                bodies[entry.id] = await _chapterText(category, book.id, entry.id);
+                final content = await _chapterContent(category, book.id, entry.id);
+                bodies[entry.id] = content.text;
+                if (content.text.isEmpty) {
+                  // Illustration pages have no text; only count a chapter as skipped when
+                  // it has neither words nor pictures.
+                  final shots = await _chapterImages(entry.id, content.images);
+                  if (shots.isEmpty) {
+                    skipped.add(entry.title.isEmpty ? entry.id : entry.title);
+                    bodies.remove(entry.id);
+                  } else {
+                    images[entry.id] = shots;
+                  }
+                }
                 onProgress?.call(index + 1, all.length);
                 // 文库对连续请求限流，逐章之间留一点间隔。
                 await Future<void>.delayed(const Duration(milliseconds: 220));
               }
-              return Wenku8Download(book, volumes, bodies);
+              if (bodies.isEmpty && images.isEmpty) {
+                throw Wenku8Exception('这本书没有抓到任何正文，可能整本都被限制。');
+              }
+              if (skipped.isNotEmpty) {
+                for (final volume in volumes) {
+                  volume.chapters.removeWhere(
+                    (chapter) =>
+                        !bodies.containsKey(chapter.id) &&
+                        !images.containsKey(chapter.id),
+                  );
+                }
+                volumes.removeWhere((volume) => volume.chapters.isEmpty);
+              }
+              return Wenku8Download(
+                book,
+                volumes,
+                bodies,
+                images: images,
+                skipped: skipped,
+              );
             }
 
 
@@ -3208,6 +3369,7 @@ jobs:
           ''');
 
               final manifest = StringBuffer();
+              final imageManifest = StringBuffer();
               final spine = StringBuffer();
               final navPoints = StringBuffer();
               var playOrder = 0;
@@ -3250,6 +3412,7 @@ jobs:
                 for (final chapter in volume.chapters) {
                   index++;
                   final body = download.chapters[chapter.id] ?? '';
+                  final shots = download.images[chapter.id] ?? const <Wenku8Image>[];
                   final path = 'chapter-$index.xhtml';
                   chapterEntry(path, chapter.title);
                   final paragraphs = body
@@ -3257,10 +3420,24 @@ jobs:
                       .where((line) => line.trim().isNotEmpty)
                       .map((line) => '<p>${_escape(line.trim())}</p>')
                       .join('\n');
+                  final figures = StringBuffer();
+                  for (final image in shots) {
+                    final id = 'img-${image.path.replaceAll(RegExp('[^A-Za-z0-9]+'), '-')}';
+                    imageManifest.writeln(
+                      '    <item id="$id" href="${image.path}" '
+                      'media-type="${image.mediaType}"/>',
+                    );
+                    archive.addFile(
+                      ArchiveFile('OEBPS/${image.path}', image.bytes.length, image.bytes),
+                    );
+                    figures.writeln(
+                      '<p class="figure"><img src="${image.path}" alt=""/></p>',
+                    );
+                  }
                   add('OEBPS/$path', _xhtml(chapter.title, '''
           <h1>${_escape(chapter.title)}</h1>
           $paragraphs
-          '''));
+          $figures'''));
                 }
               }
 
@@ -3269,6 +3446,8 @@ jobs:
           h1 { font-size: 1.4em; margin: 1.2em 0 0.8em; }
           p { margin: 0.6em 0; text-indent: 2em; }
           p.meta, p.summary { text-indent: 0; color: #666; }
+          p.figure { text-indent: 0; text-align: center; margin: 1em 0; }
+          p.figure img { max-width: 100%; height: auto; }
           ul.toc { list-style: none; padding: 0; }
           ul.toc li { padding: 0.3em 0; border-bottom: 1px solid #eee; }
           ''');
@@ -3287,7 +3466,7 @@ jobs:
             <manifest>
               <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
               <item id="css" href="style.css" media-type="text/css"/>
-          $manifest  </manifest>
+          $manifest$imageManifest  </manifest>
             <spine toc="ncx">
           $spine  </spine>
           </package>
@@ -5619,7 +5798,9 @@ jobs:
           cat > test/wenku8_epub_test.dart <<'DART_TEST_WENKU8_EPUB_TEST_DART'
           import 'dart:convert';
           import 'dart:io';
+          import 'dart:typed_data';
 
+          import 'package:archive/archive.dart';
           import 'package:flutter_test/flutter_test.dart';
           import 'package:wenku8_flutter/local_books.dart';
           import 'package:wenku8_flutter/wenku8_source.dart';
@@ -5682,6 +5863,56 @@ jobs:
               String squash(String value) => value.replaceAll(RegExp(r'\s+'), '');
               final joined = squash(imported.bodies.join('\n'));
               expect(joined, contains(squash(sample).substring(0, 20)));
+            });
+
+            test('illustration chapters carry their pictures into the epub', () {
+              // Illustration pages on the site have no text at all; they used to abort the
+              // download with "正文为空".
+              final book = Wenku8Book(
+                id: '999',
+                title: '插图测试',
+                author: '作者',
+                category: '文库',
+                status: '连载中',
+                length: '1000字',
+                updated: '2026-01-01',
+                summary: '简介',
+              );
+              final volume = Wenku8Volume('正文')
+                ..chapters.add(Wenku8Chapter(id: '1', title: '插图'));
+              final png = base64Decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAE'
+                'hQGAhKmMIQAAAABJRU5ErkJggg==',
+              );
+              final download = Wenku8Download(
+                book,
+                [volume],
+                {'1': ''},
+                images: {
+                  '1': [Wenku8Image('images/c1-0.png', Uint8List.fromList(png))],
+                },
+              );
+
+              final epub = Wenku8Client().epub(download);
+              final archive = ZipDecoder().decodeBytes(epub);
+              expect(archive.findFile('OEBPS/images/c1-0.png'), isNotNull);
+              final chapterFiles = archive.files
+                  .where((file) => RegExp(r'^OEBPS/chapter-\d+\.xhtml$').hasMatch(file.name))
+                  .map((file) => utf8.decode(file.content as List<int>))
+                  .toList();
+              expect(chapterFiles, isNotEmpty);
+              expect(
+                chapterFiles.any((markup) => markup.contains('src="images/c1-0.png"')),
+                isTrue,
+                reason: '章节页没有引用插图',
+              );
+              expect(
+                utf8.decode(archive.findFile('OEBPS/content.opf')!.content as List<int>),
+                contains('href="images/c1-0.png"'),
+              );
+
+              final imported = parseLocalBook(LocalBookInput(book.fileName, epub));
+              expect(imported.novel.chapters, isNotEmpty);
             });
           }
           DART_TEST_WENKU8_EPUB_TEST_DART
