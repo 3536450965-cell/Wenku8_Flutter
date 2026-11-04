@@ -483,14 +483,18 @@ class _Wenku8PageState extends State<Wenku8Page> {
                 ),
               ),
               const SizedBox(height: 5),
-              Text(
-                'WENKU8 / READING ARCHIVE',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  letterSpacing: 2.4,
-                  fontWeight: FontWeight.w600,
-                  color: scheme.onSurfaceVariant,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'WENKU8 / READING ARCHIVE',
+                  maxLines: 1,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: 10.5,
+                    letterSpacing: 1.5,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ],
