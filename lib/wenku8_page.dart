@@ -5,6 +5,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'app_ui.dart';
 import 'catalog.dart';
 import 'library_state.dart';
 import 'local_books.dart';
@@ -515,7 +516,15 @@ class _Wenku8PageState extends State<Wenku8Page> {
           ),
         ),
         const SizedBox(width: 12),
-        _MoreAction(onSelected: _handleMore),
+        GlassMenuAnchor(
+          child: Builder(
+            builder: (anchor) => _RoundIconButton(
+              icon: CupertinoIcons.ellipsis,
+              label: '文库选项',
+              onPressed: () => _openGlassMenu(anchor),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -552,16 +561,45 @@ class _Wenku8PageState extends State<Wenku8Page> {
     );
   }
 
-  void _handleMore(String picked) {
+  Future<void> _openGlassMenu(BuildContext anchor) async {
+    final picked = await showGlassMenu<String>(
+      context: anchor,
+      builder: (menu) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GlassMenuItem(
+            label: '检查书架更新',
+            onPressed: () => Navigator.pop(menu, 'updates'),
+          ),
+          GlassMenuItem(
+            order: 1,
+            label: '刷新书目索引',
+            onPressed: () => Navigator.pop(menu, 'index'),
+          ),
+          GlassMenuItem(
+            order: 2,
+            label: '清理下载缓存',
+            onPressed: () => Navigator.pop(menu, 'clean'),
+          ),
+          GlassMenuItem(
+            order: 3,
+            label: '关于书源',
+            onPressed: () => Navigator.pop(menu, 'about'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || picked == null) return;
     switch (picked) {
       case 'updates':
-        _checkShelfUpdates();
+        await _checkShelfUpdates();
       case 'index':
-        _refreshIndex();
+        await _refreshIndex();
       case 'clean':
-        _cleanTemporaryFiles();
+        await _cleanTemporaryFiles();
       case 'about':
-        _showAbout();
+        await _showAbout();
     }
   }
 
@@ -1185,49 +1223,16 @@ class Wenku8Downloads extends ChangeNotifier {
   }
 }
 
-class _MoreAction extends StatelessWidget {
-  const _MoreAction({required this.onSelected});
+class _RoundIconButton extends StatelessWidget {
+  const _RoundIconButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
 
-  final ValueChanged<String> onSelected;
-
-  static const _items = <PopupMenuEntry<String>>[
-    PopupMenuItem(
-      value: 'updates',
-      child: ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(CupertinoIcons.arrow_2_circlepath, size: 19),
-        title: Text('检查书架更新'),
-      ),
-    ),
-    PopupMenuItem(
-      value: 'index',
-      child: ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(CupertinoIcons.refresh, size: 19),
-        title: Text('刷新书目索引'),
-      ),
-    ),
-    PopupMenuItem(
-      value: 'clean',
-      child: ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(CupertinoIcons.trash, size: 19),
-        title: Text('清理下载缓存'),
-      ),
-    ),
-    PopupMenuItem(
-      value: 'about',
-      child: ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(CupertinoIcons.info_circle, size: 19),
-        title: Text('关于书源'),
-      ),
-    ),
-  ];
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1236,20 +1241,13 @@ class _MoreAction extends StatelessWidget {
       color: scheme.surface,
       shape: const CircleBorder(),
       clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        width: 44,
-        height: 44,
-        child: PopupMenuButton<String>(
-          tooltip: '文库选项',
-          padding: EdgeInsets.zero,
-          iconSize: 20,
-          icon: Icon(
-            CupertinoIcons.ellipsis,
-            size: 20,
-            color: scheme.onSurface,
-          ),
-          onSelected: onSelected,
-          itemBuilder: (_) => _items,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(icon, size: 20, color: scheme.onSurface),
         ),
       ),
     );

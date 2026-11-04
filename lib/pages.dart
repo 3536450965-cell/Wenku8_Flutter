@@ -22,7 +22,6 @@ import 'automatic_illustrations.dart';
 import 'local_book_series.dart';
 import 'local_book_batch_page.dart';
 import 'app_interactions.dart';
-import 'author_works_page.dart';
 import 'archive_carousel.dart';
 import 'backup_page.dart';
 import 'haptic_settings_page.dart';
@@ -1106,9 +1105,9 @@ class DiscoverPage extends StatelessWidget {
           ),
           Expanded(
             child: ContentNotice(
-              icon: CupertinoIcons.wifi_exclamationmark,
-              title: '书籍加载失败',
-              message: feed!.failureMessage,
+              leading: const AppMarkNotice(),
+              title: '这个页面要先有在线书城',
+              message: '书架里已经有文库的书：回书架点右上角 \u22ef ，选\u300c检查书架更新\u300d就能补新章。想看别的书，从书架右上角的 \u22ef 进入\u300c轻小说文库\u300d，按书名或拼音首字母搜，下载后就进书架。',
               onRetry: feed!.retry,
               secondaryAction: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -4891,25 +4890,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
             : novel.author.trim().isEmpty
             ? const SizedBox.shrink()
             : Semantics(
-                button: true,
-                label: '查看${novel.author}的作品',
+                label: novel.author,
                 child: JellyTapSurface(
                   key: const ValueKey('detail-author-works'),
-                  onTap: () => pushNovelPage<void>(
-                    context,
-                    AuthorWorksPage(
-                      author: novel.author,
-                      repository: repository,
-                      state: state,
-                      localOnly: isLocalBook(novel.id),
-                    ),
-                    reduceMotion: _reduceMotion,
-                    explorationKey: (
-                      'author',
-                      novel.author.trim(),
-                      isLocalBook(novel.id),
-                    ),
-                  ),
+                  onTap: null,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Row(
@@ -5036,15 +5020,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       for (final tag in novel.tags)
         JellyTapSurface(
           key: ValueKey('detail-tag-$tag'),
-          onTap: () => pushNovelPage<void>(
-            context,
-            TagWorksPage(tag: tag, repository: repository, state: state),
-            reduceMotion: state.reduceMotion,
-            explorationKey: ('tag', tag),
-          ),
+          onTap: null,
           child: Semantics(
-            button: true,
-            label: '查看标签 $tag 的书籍',
+            label: '标签 $tag',
             child: DecoratedBox(
               decoration: BoxDecoration(
                 border: Border.all(

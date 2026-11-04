@@ -141,9 +141,9 @@ class _AuthorWorksPageState extends State<AuthorWorksPage> {
       builder: (context, _) {
         if (_feed.items.isEmpty && _feed.error != null) {
           return ContentNotice(
-            icon: CupertinoIcons.wifi_exclamationmark,
-            title: '作品加载失败',
-            message: _feed.failureMessage,
+            leading: const AppMarkNotice(),
+            title: '这个页面要先有在线书城',
+            message: '书架里已经有文库的书：回书架点右上角 \u22ef ，选\u300c检查书架更新\u300d就能补新章。想看别的书，从书架右上角的 \u22ef 进入\u300c轻小说文库\u300d，按书名或拼音首字母搜，下载后就进书架。',
             onRetry: _feed.retry,
             secondaryAction: Column(
               mainAxisSize: MainAxisSize.min,

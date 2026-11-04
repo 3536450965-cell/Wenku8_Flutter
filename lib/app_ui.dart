@@ -1831,17 +1831,45 @@ class CoverGlow extends StatelessWidget {
 
 /// Consistent recovery/empty states use the same typography, spacing and glass
 /// action as the rest of the app, rather than unrelated stock dialog styles.
+/// The app mark, used in place of an error glyph on screens that need the
+/// online source we do not ship.
+class AppMarkNotice extends StatelessWidget {
+  const AppMarkNotice({super.key, this.size = 64});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(size * .28),
+    child: Image.asset(
+      'assets/branding/app-icon.png',
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => Icon(
+        CupertinoIcons.book_solid,
+        size: size * .45,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
+}
+
 class ContentNotice extends StatelessWidget {
   const ContentNotice({
     super.key,
-    required this.icon,
+    this.icon,
+    this.leading,
     required this.title,
     this.message,
     this.onRetry,
     this.actionLabel = '重试',
     this.secondaryAction,
   });
-  final IconData icon;
+  final IconData? icon;
+
+  /// Shown instead of [icon]; used for the app mark on source-less screens.
+  final Widget? leading;
   final String title;
   final String? message;
   final VoidCallback? onRetry;
@@ -1855,12 +1883,13 @@ class ContentNotice extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          ArchiveIcon(
-            icon,
-            ambient: true,
-            size: 34,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          leading ??
+              ArchiveIcon(
+                icon ?? CupertinoIcons.info,
+                ambient: true,
+                size: 34,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
           const SizedBox(height: 16),
           AppText(
             title,
