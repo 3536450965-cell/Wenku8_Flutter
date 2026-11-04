@@ -2527,7 +2527,7 @@ jobs:
           import 'dart:io';
           import 'dart:typed_data';
 
-          import 'package:archive/archive.dart';
+          import 'package:archive/archive.dart' hide ZLibDecoder;
           import 'package:charset/charset.dart';
 
           /// Online book source for `wenku8.net`.
@@ -2613,6 +2613,7 @@ jobs:
             static const _origins = ['https://www.wenku8.net'];
 
             final Duration timeout;
+            final Map<String, String> _categories = {};
             HttpClient? _client;
             String? _origin;
 
@@ -2633,6 +2634,7 @@ jobs:
               if (existing != null) return existing;
               final client = HttpClient()
                 ..connectionTimeout = timeout
+                ..autoUncompress = false
                 ..userAgent = userAgent;
               _client = client;
               return client;
@@ -2640,29 +2642,57 @@ jobs:
 
             Future<String> _get(String path) async {
               Object? lastError;
-              for (var attempt = 0; attempt < 3; attempt++) {
+              for (var attempt = 0; attempt < 5; attempt++) {
                 final origin = _origin ?? _origins.first;
                 try {
                   final client = await _http();
                   final request = await client.getUrl(Uri.parse('$origin$path'));
+                  // The site sits behind Cloudflare and rejects requests that do not look
+                  // like a browser; an explicit `accept-encoding` is part of that, so the
+                  // body is inflated here instead of by dart:io.
                   request.headers.set(HttpHeaders.userAgentHeader, userAgent);
                   request.headers.set(HttpHeaders.refererHeader, '$origin/');
-                  request.headers.set(HttpHeaders.acceptHeader, 'text/html,*/*');
+                  request.headers.set(
+                    HttpHeaders.acceptHeader,
+                    'text/html,application/xhtml+xml,application/xml;q=0.9,'
+                    'image/avif,image/webp,*/*;q=0.8',
+                  );
+                  request.headers.set(
+                    HttpHeaders.acceptLanguageHeader,
+                    'zh-CN,zh;q=0.9,en;q=0.8',
+                  );
+                  request.headers.set(HttpHeaders.acceptEncodingHeader, 'gzip, deflate');
+                  request.headers.set('upgrade-insecure-requests', '1');
+                  request.headers.set('sec-fetch-dest', 'document');
+                  request.headers.set('sec-fetch-mode', 'navigate');
+                  request.headers.set('sec-fetch-site', 'same-origin');
+                  request.headers.set('sec-fetch-user', '?1');
                   final response = await request.close().timeout(timeout);
+                  if (response.statusCode == 429 || response.statusCode == 503) {
+                    await response.drain<void>();
+                    lastError = Wenku8Exception('文库繁忙（${response.statusCode}）');
+                    await Future<void>.delayed(Duration(seconds: 2 + 2 * attempt));
+                    continue;
+                  }
                   if (response.statusCode != 200) {
-                    throw Wenku8Exception('文库返回 ${response.statusCode}，请稍后再试。');
+                    throw Wenku8Exception('文库返回 ${response.statusCode}：$path');
                   }
                   final bytes = await response
                       .fold<BytesBuilder>(BytesBuilder(copy: false), (b, c) => b..add(c))
                       .timeout(timeout);
                   _origin = origin;
-                  return _decode(bytes.takeBytes());
+                  return _decode(
+                    _inflate(
+                      bytes.takeBytes(),
+                      response.headers.value(HttpHeaders.contentEncodingHeader),
+                    ),
+                  );
                 } catch (error) {
                   lastError = error;
                   _client?.close(force: true);
                   _client = null;
                   if (error is Wenku8Exception) rethrow;
-                  await Future<void>.delayed(Duration(milliseconds: 600 * (attempt + 1)));
+                  await Future<void>.delayed(Duration(milliseconds: 800 * (attempt + 1)));
                 }
               }
               throw Wenku8Exception('连接文库失败：${_reason(lastError)}');
@@ -2675,6 +2705,22 @@ jobs:
               return '$error';
             }
 
+            static List<int> _inflate(List<int> bytes, String? encoding) {
+              if (bytes.isEmpty) return bytes;
+              final name = (encoding ?? '').toLowerCase();
+              if (name.contains('gzip')) {
+                return gzip.decode(bytes);
+              }
+              if (name.contains('deflate')) {
+                try {
+                  return zlib.decode(bytes);
+                } on FormatException {
+                  return ZLibDecoder(raw: true).convert(bytes);
+                }
+              }
+              return bytes;
+            }
+
             static String _decode(List<int> bytes) {
               try {
                 return utf8.decode(bytes);
@@ -2685,28 +2731,46 @@ jobs:
 
             Future<Wenku8Book> book(String id) async {
               final html = await _get('/book/$id.htm');
-              final title = _clean(_first(html, [
-                RegExp(r'<div[^>]*id="title"[^>]*>(.*?)</div>', dotAll: true),
-                RegExp(r'<h1[^>]*>(.*?)</h1>', dotAll: true),
+              // 书页没有 `id="title"`，`<title>` 的形式是「书名 - 作者 - 文库 - 轻小说文库」。
+              final raw = _clean(_first(html, [
                 RegExp(r'<title[^>]*>(.*?)</title>', dotAll: true),
               ]));
+              final title = raw.split(' - ').first.trim();
               if (title.isEmpty) throw Wenku8Exception('没有找到这本书，编号 $id 可能不存在。');
+              final summary = _clean(_slice(html, '内容简介', '</td>'))
+                  .replaceFirst(RegExp(r'^[:：\s]+'), '')
+                  .split('\n')
+                  .where(
+                    (line) =>
+                        line.isNotEmpty &&
+                        !line.contains('推一下') &&
+                        !line.contains('举报'),
+                  )
+                  .join('\n');
               return Wenku8Book(
                 id: id,
-                title: title.split('_').first.trim(),
+                title: title,
                 author: _field(html, '小说作者'),
                 category: _field(html, '文库分类'),
                 status: _field(html, '文章状态'),
                 length: _field(html, '全文长度'),
                 updated: _field(html, '最后更新'),
-                summary: _clean(_first(html, [
-                  RegExp(r'<div[^>]*id="content"[^>]*>(.*?)</div>', dotAll: true),
-                ])),
+                summary: summary,
               );
             }
 
+            /// Raw substring that follows [label] up to the first occurrence of [until].
+            static String _slice(String html, String label, String until) {
+              final start = html.indexOf(label);
+              if (start < 0) return '';
+              final rest = html.substring(start + label.length);
+              final end = rest.indexOf(until);
+              return end < 0 ? rest : rest.substring(0, end);
+            }
+
             Future<List<Wenku8Volume>> catalog(String id) async {
-              final html = await _get('/novel/${_categoryPath(id)}/$id/index.htm');
+              final category = await _categoryPath(id);
+              final html = await _get('/novel/$category/$id/index.htm');
               final entries = <({bool header, String text, String? id})>[];
               for (final row in RegExp(
                 r'<tr[^>]*>(.*?)</tr>',
@@ -2764,11 +2828,16 @@ jobs:
             /// part of the book page, so it is discovered by following the `/book/`
             /// redirect target which encodes it.
             Future<String> _categoryPath(String id) async {
+              final cached = _categories[id];
+              if (cached != null) return cached;
               final html = await _get('/book/$id.htm');
-              final match = RegExp(r'/novel/([^/]+)/' + RegExp.escape(id)).firstMatch(
+              final match = RegExp(r'/novel/(\d+)/' + RegExp.escape(id)).firstMatch(
                 html,
               );
-              if (match != null) return match.group(1)!;
+              if (match != null) {
+                _categories[id] = match.group(1)!;
+                return match.group(1)!;
+              }
               throw Wenku8Exception('无法确定这本书的分类，可能已下架。');
             }
 
@@ -2800,9 +2869,10 @@ jobs:
               for (var index = 0; index < all.length; index++) {
                 if (isCancelled?.call() ?? false) throw Wenku8Exception('已取消。');
                 final entry = all[index];
-                final text = await _chapterText(category, book.id, entry.id);
-                bodies[entry.id] = text;
+                bodies[entry.id] = await _chapterText(category, book.id, entry.id);
                 onProgress?.call(index + 1, all.length);
+                // 文库对连续请求限流，逐章之间留一点间隔。
+                await Future<void>.delayed(const Duration(milliseconds: 220));
               }
               return Wenku8Download(book, volumes, bodies);
             }
@@ -2985,12 +3055,22 @@ jobs:
                 .join('\n')
                 .trim();
 
-            static const _junk = {
-              '文库',
-              'www.wenku8.net',
-              'Wenku8',
-              '笔趣阁',
-            };
+            static const _junk = {'文库', 'www.wenku8.net', 'Wenku8', '笔趣阁'};
+
+            /// Lines that are scan credits or site notices rather than story text.
+            static const _creditMarkers = [
+              '轻之国度',
+              '图源：',
+              '图源:',
+              '录入：',
+              '录入:',
+              '转自',
+              '禁止转载',
+              '首发',
+              '本文来自',
+              '手机用户请',
+              '本章未完',
+            ];
 
             static String _plain(String html) => _clean(html)
                 .split('\n')
@@ -3001,7 +3081,7 @@ jobs:
                       !_junk.contains(line) &&
                       !line.startsWith('请记住本书') &&
                       !line.contains('wenku8') &&
-                      !line.contains('本站'),
+                      !_creditMarkers.any(line.contains),
                 )
                 .join('\n')
                 .trim();
