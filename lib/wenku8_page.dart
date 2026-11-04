@@ -516,9 +516,9 @@ class _Wenku8PageState extends State<Wenku8Page> {
         ),
         const SizedBox(width: 12),
         _RoundAction(
-          icon: CupertinoIcons.search,
-          label: '搜索文库',
-          onPressed: _openSearchSheet,
+          icon: CupertinoIcons.ellipsis,
+          label: '文库选项',
+          onPressed: () => _openMoreMenu(context),
         ),
       ],
     );
@@ -556,6 +556,104 @@ class _Wenku8PageState extends State<Wenku8Page> {
     );
   }
 
+  Future<void> _openMoreMenu(BuildContext context) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final origin = box == null || overlay == null
+        ? null
+        : box.localToGlobal(
+            Offset(box.size.width - 200, box.size.height + 6),
+            ancestor: overlay,
+          );
+    final picked = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        origin?.dx ?? 0,
+        origin?.dy ?? 0,
+        origin == null ? 0 : overlay!.size.width - origin.dx - 200,
+        0,
+      ),
+      items: const [
+        PopupMenuItem(
+          value: 'updates',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(CupertinoIcons.arrow_2_circlepath, size: 19),
+            title: Text('检查书架更新'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'index',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(CupertinoIcons.refresh, size: 19),
+            title: Text('刷新书目索引'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'clean',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(CupertinoIcons.trash, size: 19),
+            title: Text('清理下载缓存'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'about',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(CupertinoIcons.info_circle, size: 19),
+            title: Text('关于书源'),
+          ),
+        ),
+      ],
+    );
+    if (!mounted || picked == null) return;
+    switch (picked) {
+      case 'updates':
+        await _checkShelfUpdates();
+      case 'index':
+        await _refreshIndex();
+      case 'clean':
+        await _cleanTemporaryFiles();
+      case 'about':
+        await _showAbout();
+    }
+  }
+
+  Future<void> _showAbout() async {
+    var rows = 0;
+    try {
+      rows = (await Wenku8Index.load()).entries.length;
+    } catch (_) {
+      rows = 0;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('关于书源'),
+        content: Text(
+          '轻小说文库（wenku8）· 免注册阅读\n'
+          '镜像：www.wenku8.cc / www.wenku8.net\n'
+          '内置书目索引：$rows 本\n'
+          'App 版本 0.5.10 (2281)',
+          style: const TextStyle(height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialog).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _checkShelfUpdates() async {
     final watcher = Wenku8Updates.instance;
     if (watcher == null) {
@@ -584,76 +682,6 @@ class _Wenku8PageState extends State<Wenku8Page> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _openSearchSheet() {
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheet) => Padding(
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          bottom: MediaQuery.viewInsetsOf(sheet).bottom + 24,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _input,
-              autofocus: true,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) {
-                Navigator.of(sheet).pop();
-                _search();
-              },
-              decoration: const InputDecoration(
-                labelText: '书名 / 作者 / 编号 / 链接',
-                hintText: '例如 文学少女、野村美月、1234、bdnj',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.of(sheet).pop();
-                _search();
-              },
-              icon: const Icon(Icons.search, size: 18),
-              label: const Text('搜索'),
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(sheet).pop();
-                    _refreshIndex();
-                  },
-                  child: const Text('刷新书目索引'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(sheet).pop();
-                    _cleanTemporaryFiles();
-                  },
-                  child: const Text('清理下载缓存'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(sheet).pop();
-                    _checkShelfUpdates();
-                  },
-                  child: const Text('检查书架更新'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -678,6 +706,14 @@ class _Wenku8PageState extends State<Wenku8Page> {
         children: [
           _brandHeader(context),
           _searchBar(context),
+          if (_results.isEmpty && _book == null && !_busy && !_pumping)
+            Padding(
+              padding: const EdgeInsets.only(top: 28),
+              child: Text(
+                '搜书名、作者或编号；也可以直接打拼音首字母，比如 bdnj。',
+                style: muted,
+              ),
+            ),
           if (_busy && !_pumping)
             const Padding(
               padding: EdgeInsets.only(top: 16),

@@ -79,10 +79,6 @@ Widget _localLibraryHeader(
           onPressed: onOnline,
         ),
       ),
-      if (onOnline != null) ...[
-        const SizedBox(width: 8),
-        _RoundSourceButton(onPressed: onOnline),
-      ],
       const SizedBox(width: 2),
       GlassMenuAnchor(
         child: Builder(
@@ -1296,28 +1292,3 @@ class _ShelfBrandHeader extends StatelessWidget {
 }
 
 /// Round white button that opens the Wenku8 source, mirroring the reference.
-class _RoundSourceButton extends StatelessWidget {
-  const _RoundSourceButton({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surface,
-      shape: const CircleBorder(),
-      elevation: 1,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onPressed,
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: Icon(CupertinoIcons.search, size: 20, color: scheme.onSurface),
-        ),
-      ),
-    );
-  }
-}
