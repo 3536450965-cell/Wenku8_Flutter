@@ -63,15 +63,18 @@ class Wenku8Updates extends ChangeNotifier {
         pending.add(book);
       }
       final index = await _indexOrNull();
+      var consecutiveFailures = 0;
       for (final book in pending) {
         final id = _sourceId(book, index);
         if (id == null) continue;
+        if (consecutiveFailures >= 2) break;
         try {
           final volumes = await _client.catalog(id);
           final remote = volumes.fold<int>(
             0,
             (sum, volume) => sum + volume.chapters.length,
           );
+          consecutiveFailures = 0;
           if (remote > book.chapterCount) {
             found.add(
               Wenku8UpdateNotice(
@@ -83,7 +86,9 @@ class Wenku8Updates extends ChangeNotifier {
             );
           }
         } catch (_) {
-          // A single unreachable book must not hide the others.
+          // Offline or rate limited: stop after two misses instead of waiting
+          // through the whole shelf.
+          consecutiveFailures++;
         }
       }
       notices = List.unmodifiable(found);
