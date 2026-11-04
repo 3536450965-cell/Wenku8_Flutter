@@ -1,0 +1,46 @@
+name: Wenku8 book index
+
+# The app searches a bundled index because the site's own search needs an
+# account nobody can create any more. New books take the next free id, so this
+# weekly job only looks past the highest id we already know and commits the
+# grown table; the app picks it up from data/wenku8_index.json within a couple
+# of days (see Wenku8Index.load).
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wenku8-index
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Look for new books
+        run: node tools/index_crawl.mjs
+
+      - name: Commit the grown index
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- data/wenku8_index.json; then
+            echo "index unchanged"
+            exit 0
+          fi
+          rows=$(python3 -c "import json;print(len(json.load(open('data/wenku8_index.json'))))")
+          git config user.name 'wenku8 index bot'
+          git config user.email 'noreply@github.com'
+          git add data/wenku8_index.json
+          git commit -m "chore: refresh book index (${rows} books)"
+          git push

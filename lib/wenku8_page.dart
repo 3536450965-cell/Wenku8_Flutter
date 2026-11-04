@@ -207,8 +207,8 @@ class _Wenku8PageState extends State<Wenku8Page> {
         _results = hits;
         _query = text;
         _hint = hits.isEmpty
-            ? '索引里没有匹配「$text」的书（共 ${index.entries.length} 本）。'
-                '换个关键词试试，或直接粘贴文库书籍链接。'
+            ? '索引里没有「$text」（共 ${index.entries.length} 本，每周自动补新书）。'
+                '可以改用书籍编号，或粘贴文库书籍链接。'
             : '找到 ${hits.length} 本（索引共 ${index.entries.length} 本）';
       });
     } catch (error) {

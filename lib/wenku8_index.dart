@@ -70,7 +70,9 @@ class Wenku8Index {
     'https://raw.githubusercontent.com/3536450965-cell/Wenku8_Flutter/master/data/wenku8_index.json',
   ];
 
-  static const _maxAge = Duration(days: 7);
+  /// A weekly job in the repository appends newly published books, so a short
+  /// window keeps search fresh without re-downloading the table on every launch.
+  static const _maxAge = Duration(days: 2);
   static const _ua =
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 '
       '(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';

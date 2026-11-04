@@ -1,4 +1,4 @@
-// !$*UTF8*$!
+﻿// !$*UTF8*$!
 {
 	archiveVersion = 1;
 	classes = {
@@ -71,7 +71,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				0BCFBA33B110A395313BA57F /* ReadingWidgets.appex in Embed Reading Widgets */,
 			);
 			name = "Embed Reading Widgets";
 			runOnlyForDeploymentPostprocessing = 0;
