@@ -273,17 +273,19 @@ class _Wenku8PageState extends State<Wenku8Page> {
       0,
       (sum, volume) => sum + volume.chapters.length,
     );
-    _downloads.enqueue(
+    final added = _downloads.enqueue(
       _Job(book: book, volumes: picked, chapters: chapters),
     );
     setState(() {
       _error = null;
-      _hint = '已加入队列：《${book.title}》$chapters 章';
+      _hint = added
+          ? '已加入队列：《${book.title}》$chapters 章'
+          : '《${book.title}》已经在下载队列里了。';
     });
   }
 
   void _enqueueBook(Wenku8Book book, {bool forceFull = false}) {
-    _downloads.enqueue(
+    final added = _downloads.enqueue(
       _Job(
         book: book,
         volumes: const [],
@@ -293,9 +295,13 @@ class _Wenku8PageState extends State<Wenku8Page> {
     );
     setState(() {
       _error = null;
-      _hint = forceFull
-          ? '已加入队列（重下）：《${book.title}》'
-          : '已加入队列：《${book.title}》';
+      if (!added) {
+        _hint = '《${book.title}》已经在下载队列里了。';
+      } else {
+        _hint = forceFull
+            ? '已加入队列（重下）：《${book.title}》'
+            : '已加入队列：《${book.title}》';
+      }
     });
   }
 
@@ -321,7 +327,7 @@ class _Wenku8PageState extends State<Wenku8Page> {
       );
       return;
     }
-    _downloads.enqueue(
+    final added = _downloads.enqueue(
       _Job(
         book: Wenku8Book(
           id: '${entry.id}',
@@ -338,7 +344,11 @@ class _Wenku8PageState extends State<Wenku8Page> {
         chapters: 0,
       ),
     );
-    setState(() => _hint = '已加入队列：《${entry.title}》');
+    setState(() {
+      _hint = added
+          ? '已加入队列：《${entry.title}》'
+          : '《${entry.title}》已经在下载队列里了。';
+    });
   }
 
 
@@ -991,10 +1001,14 @@ class Wenku8Downloads extends ChangeNotifier {
     state = libraryState;
   }
 
-  void enqueue(_Job job) {
+  bool enqueue(_Job job) {
+    // Tapping the same book twice used to queue it twice: the first copy
+    // imported fine and the second one kept re-downloading behind the panel.
+    if (queue.any((other) => other.book.id == job.book.id)) return false;
     queue.add(job);
     notifyListeners();
     unawaited(_pump());
+    return true;
   }
 
   void cancel() {

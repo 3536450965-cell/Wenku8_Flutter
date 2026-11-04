@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -152,6 +152,8 @@ class Wenku8Client {
   /// 同时抓取的章节数。文库对突发请求敏感，4 条连接配 140ms 间隔在实测里
   /// 没有触发限流，又比逐章串行快上数倍。
   static const int _downloadWorkers = 4;
+  static const int _imageWorkers = 3;
+  static const Duration _imageTimeout = Duration(seconds: 12);
   final Map<String, String> _categories = {};
   HttpClient? _client;
   String? _origin;
@@ -471,26 +473,44 @@ class Wenku8Client {
   static const _maxImageBytes = 8 * 1024 * 1024;
   static const _maxTotalImageBytes = 160 * 1024 * 1024;
 
+  /// Illustration pages hold up to thirty pictures, so they are fetched a few
+  /// at a time: one slow picture must not stall the chapter (and the progress
+  /// bar) for minutes.
   Future<List<Wenku8Image>> _chapterImages(
     String chapterId,
     List<String> urls,
   ) async {
-    final result = <Wenku8Image>[];
+    final wanted = urls.take(_maxImagesPerChapter).toList();
+    final fetched = List<Uint8List?>.filled(wanted.length, null);
     var total = 0;
-    for (var index = 0; index < urls.length; index++) {
-      if (index >= _maxImagesPerChapter) break;
-      try {
-        final bytes = await _getImage(urls[index]);
-        if (bytes.length > _maxImageBytes) continue;
-        total += bytes.length;
-        if (total > _maxTotalImageBytes) break;
-        final ext = _imageExtension(urls[index]);
-        result.add(Wenku8Image('images/c$chapterId-$index$ext', bytes));
-      } on Wenku8Exception {
-        // A missing picture should not abort the whole book.
-        continue;
+    var cursor = 0;
+    Future<void> worker() async {
+      while (true) {
+        final index = cursor++;
+        if (index >= wanted.length) return;
+        if (total > _maxTotalImageBytes) return;
+        try {
+          final bytes = await _getImage(wanted[index]);
+          if (bytes.length <= _maxImageBytes) {
+            total += bytes.length;
+            fetched[index] = bytes;
+          }
+        } on Wenku8Exception {
+          // A missing picture should not abort the whole book.
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 120));
       }
-      await Future<void>.delayed(const Duration(milliseconds: 160));
+    }
+
+    await Future.wait([
+      for (var i = 0; i < _imageWorkers && i < wanted.length; i++) worker(),
+    ]);
+    final result = <Wenku8Image>[];
+    for (var index = 0; index < fetched.length; index++) {
+      final bytes = fetched[index];
+      if (bytes == null) continue;
+      final ext = _imageExtension(wanted[index]);
+      result.add(Wenku8Image('images/c$chapterId-$index$ext', bytes));
     }
     return result;
   }
@@ -505,7 +525,7 @@ class Wenku8Client {
 
   Future<Uint8List> _getImage(String url) async {
     Object? lastError;
-    for (var attempt = 0; attempt < 4; attempt++) {
+    for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final client = await _http();
         final origin = _origin ?? _origins.first;
@@ -517,16 +537,17 @@ class Wenku8Client {
           'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         );
         request.headers.set(HttpHeaders.acceptEncodingHeader, 'gzip, deflate');
-        final response = await request.close().timeout(timeout);
+        final response = await request.close().timeout(_imageTimeout);
         if (response.statusCode != 200) {
           await response.drain<void>();
           lastError = Wenku8Exception('插图返回 ${response.statusCode}');
+          if (attempt == 0) _rotateOrigin(origin);
           await Future<void>.delayed(Duration(milliseconds: 500 * (attempt + 1)));
           continue;
         }
         final bytes = await response
             .fold<BytesBuilder>(BytesBuilder(copy: false), (b, c) => b..add(c))
-            .timeout(timeout);
+            .timeout(_imageTimeout);
         return Uint8List.fromList(
           _inflate(
             bytes.takeBytes(),
@@ -557,6 +578,25 @@ class Wenku8Client {
     final skipped = <String>[];
     final failed = <String>[];
     var done = 0;
+
+    // 封面先取：一本插图多的书要抓几百张图，图片站之后就开始限流，
+    // 以前把封面放在最后取，结果经常空手而归（书架上就没有封面）。
+    Wenku8Image? cover;
+    final coverUrl = book.coverUrl;
+    if (coverUrl != null) {
+      for (var attempt = 0; attempt < 3 && cover == null; attempt++) {
+        try {
+          final bytes = await _getImage(coverUrl);
+          cover = Wenku8Image('images/cover${_imageExtension(coverUrl)}', bytes);
+        } on Wenku8Exception {
+          if (attempt < 2) _rotateOrigin(_origin ?? _origins.first);
+          await Future<void>.delayed(
+            Duration(milliseconds: 600 * (attempt + 1)),
+          );
+        }
+      }
+    }
+
     Future<void> fetch(Wenku8Chapter entry) async {
       if (isCancelled?.call() ?? false) throw Wenku8Exception('已取消。');
       ({String text, List<String> images}) content;
@@ -578,7 +618,10 @@ class Wenku8Client {
       bodies[entry.id] = content.text;
       if (content.text.isEmpty) {
         // Illustration pages have no text; only count a chapter as skipped when
-        // it has neither words nor pictures.
+        // it has neither words nor pictures. Move the bar first, so a picture
+        // heavy chapter never looks like a stuck download.
+        done++;
+        onProgress?.call(done, all.length);
         final shots = await _chapterImages(entry.id, content.images);
         if (shots.isEmpty) {
           skipped.add(entry.title.isEmpty ? entry.id : entry.title);
@@ -586,6 +629,7 @@ class Wenku8Client {
         } else {
           images[entry.id] = shots;
         }
+        return;
       }
       done++;
       onProgress?.call(done, all.length);
@@ -610,16 +654,6 @@ class Wenku8Client {
     ]);
     if (bodies.isEmpty && images.isEmpty) {
       throw Wenku8Exception('这本书没有抓到任何正文，可能整本都被限制。');
-    }
-    Wenku8Image? cover;
-    final coverUrl = book.coverUrl;
-    if (coverUrl != null) {
-      try {
-        final bytes = await _getImage(coverUrl);
-        cover = Wenku8Image('images/cover${_imageExtension(coverUrl)}', bytes);
-      } on Wenku8Exception {
-        // 封面只是装饰，抓不到不影响正文导入。
-      }
     }
     if (skipped.isNotEmpty || failed.isNotEmpty) {
       for (final volume in volumes) {
