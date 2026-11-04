@@ -64,37 +64,27 @@ Widget _localLibraryHeader(
   bool back = false,
   VoidCallback? onOnline,
 }) {
-  Widget header() => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget header() => Row(
     children: [
-      Row(
-        children: [
-          if (back)
-            GlassIconButton(
-              icon: CupertinoIcons.back,
-              label: '返回',
-              onPressed: () => Navigator.pop(context),
-            ),
-          Expanded(
-            child: _ShelfBrandHeader(
-              title: onOnline == null ? '书架' : '轻小说文库',
-              subtitle: onOnline == null
-                  ? 'SHELF'
-                  : 'WENKU8 / READING ARCHIVE',
-              onPressed: onOnline,
-            ),
-          ),
-          if (onOnline != null) ...[
-            const SizedBox(width: 10),
-            _RoundSourceButton(onPressed: onOnline),
-          ],
-        ],
+      if (back)
+        GlassIconButton(
+          icon: CupertinoIcons.back,
+          label: '返回',
+          onPressed: () => Navigator.pop(context),
+        ),
+      Expanded(
+        child: _ShelfBrandHeader(
+          title: onOnline == null ? '书架' : '轻小说文库',
+          subtitle: onOnline == null ? 'SHELF' : 'WENKU8 / READING ARCHIVE',
+          onPressed: onOnline,
+        ),
       ),
-      const SizedBox(height: 2),
-      Row(
-        children: [
-          const Spacer(),
-          GlassMenuAnchor(
+      if (onOnline != null) ...[
+        const SizedBox(width: 8),
+        _RoundSourceButton(onPressed: onOnline),
+      ],
+      const SizedBox(width: 2),
+      GlassMenuAnchor(
         child: Builder(
           builder: (anchor) => GlassIconButton(
             key: const ValueKey('local-import-book'),
@@ -106,13 +96,11 @@ Widget _localLibraryHeader(
           ),
         ),
       ),
-          GlassIconButton(
-            key: const ValueKey('local-search'),
-            icon: CupertinoIcons.search,
-            label: '搜索本地书籍',
-            onPressed: controller?.search,
-          ),
-        ],
+      GlassIconButton(
+        key: const ValueKey('local-search'),
+        icon: CupertinoIcons.search,
+        label: '搜索本地书籍',
+        onPressed: controller?.search,
       ),
     ],
   );
@@ -1237,15 +1225,15 @@ class _ShelfBrandHeader extends StatelessWidget {
         child: Row(
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(11),
               child: Image.asset(
                 'assets/branding/app-icon.png',
-                width: 44,
-                height: 44,
+                width: 40,
+                height: 40,
                 fit: BoxFit.cover,
                 errorBuilder: (_, _, _) => Container(
-                  width: 44,
-                  height: 44,
+                  width: 40,
+                  height: 40,
                   color: scheme.primary,
                   child: Icon(
                     CupertinoIcons.book_solid,
@@ -1257,35 +1245,47 @@ class _ShelfBrandHeader extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      height: 1.1,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      subtitle,
-                      maxLines: 1,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        fontSize: 10.5,
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onSurfaceVariant,
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final tight = box.maxWidth < 132;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            (tight
+                                    ? theme.textTheme.titleMedium
+                                    : theme.textTheme.titleLarge)
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.1,
+                                  letterSpacing: 0.2,
+                                ),
                       ),
-                    ),
-                  ),
-                ],
+                      if (!tight) ...[
+                        const SizedBox(height: 4),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            subtitle,
+                            maxLines: 1,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontSize: 10.5,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.w600,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -1313,9 +1313,9 @@ class _RoundSourceButton extends StatelessWidget {
         customBorder: const CircleBorder(),
         onTap: onPressed,
         child: SizedBox(
-          width: 48,
-          height: 48,
-          child: Icon(CupertinoIcons.search, size: 21, color: scheme.onSurface),
+          width: 44,
+          height: 44,
+          child: Icon(CupertinoIcons.search, size: 20, color: scheme.onSurface),
         ),
       ),
     );
