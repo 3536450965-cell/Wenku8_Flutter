@@ -2884,10 +2884,16 @@ jobs:
 
             /// The library picks the parser from the file name, and
             /// `parseLocalBook` only accepts names ending in `.epub` or `.txt`, so the
-            /// extension is part of this contract.
+            /// extension is part of this contract. The name is also clipped because iOS
+            /// rejects file names longer than 255 bytes.
             String get fileName {
-              final clean = title.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), ' ').trim();
-              return clean.isEmpty ? 'wenku8-$id.epub' : '$clean（文库）.epub';
+              var clean = title.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), ' ').trim();
+              while (clean.endsWith('.')) {
+                clean = clean.substring(0, clean.length - 1).trim();
+              }
+              if (clean.isEmpty) return 'wenku8-$id.epub';
+              if (clean.length > 60) clean = clean.substring(0, 60).trim();
+              return '$clean（文库）.epub';
             }
           }
 
