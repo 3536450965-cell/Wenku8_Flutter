@@ -5651,18 +5651,21 @@ jobs:
                 for (final entry in (fixture['bodies'] as Map<String, Object?>).entries)
                   entry.key: entry.value! as String,
               };
-              final volumes = <Wenku8Volume>[
-                for (final volume in fixture['volumes']! as List<Object?>)
-                  Wenku8Volume((volume! as Map<String, Object?>)['title']! as String)
-                    ..chapters.addAll([
-                      for (final chapter
-                          in (volume['chapters']! as List<Object?>).cast<Map<String, Object?>>())
-                        Wenku8Chapter(
-                          id: chapter['id']! as String,
-                          title: chapter['title']! as String,
-                        ),
-                    ]),
-              ];
+              final volumes = <Wenku8Volume>[];
+              for (final rawVolume in (fixture['volumes']! as List<Object?>)) {
+                final volume = rawVolume! as Map<String, Object?>;
+                final built = Wenku8Volume(volume['title']! as String);
+                for (final rawChapter in (volume['chapters']! as List<Object?>)) {
+                  final chapter = rawChapter! as Map<String, Object?>;
+                  built.chapters.add(
+                    Wenku8Chapter(
+                      id: chapter['id']! as String,
+                      title: chapter['title']! as String,
+                    ),
+                  );
+                }
+                volumes.add(built);
+              }
 
               final epub = Wenku8Client().epub(Wenku8Download(book, volumes, bodies));
               expect(epub.length, greaterThan(1024));
