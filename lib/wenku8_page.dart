@@ -93,7 +93,9 @@ class _Job {
     this.forceFull = false,
   });
 
-  final Wenku8Book book;
+  /// Search results only carry the index fields, so the download replaces this
+  /// with the freshly scraped book page (cover, summary, word count).
+  Wenku8Book book;
   List<Wenku8Volume> volumes;
   int chapters;
   String? status;
@@ -1137,6 +1139,18 @@ class Wenku8Downloads extends ChangeNotifier {
   Future<void> _run(_Job job) async {
     final store = books;
     if (store == null) return;
+    if (job.book.coverUrl == null) {
+      // Came from the index (search list / queue), which knows nothing about
+      // the cover. Fetch the book page first, otherwise the epub ships without
+      // a cover and the shelf shows a plain colour block.
+      job.status = '读取书籍信息…';
+      notifyListeners();
+      try {
+        job.book = await _client.book(job.book.id);
+      } on Wenku8Exception {
+        // The download still works; only the cover and summary are missing.
+      }
+    }
     final local = job.forceFull ? null : _localFor(store, job.book.title);
     var reused = const <String, String>{};
     var reusedCount = 0;
