@@ -545,8 +545,8 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
       ),
       reduceMotion: state.reduceMotion,
     );
-    if (identical(_lanSync?.handoff.received, receipt)) {
-      _lanSync?.handoff.dismissReceipt();
+    if (identical(_lanSync?.handoff?.received, receipt)) {
+      _lanSync?.handoff?.dismissReceipt();
     }
   }
 

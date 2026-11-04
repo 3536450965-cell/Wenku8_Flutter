@@ -8,6 +8,7 @@ import 'book_tag_catalog.dart';
 import 'book_search.dart';
 import 'tag_catalogue.dart';
 import 'blocked_tags.dart';
+import 'online_component.dart';
 import 'publication_catalog.dart';
 import 'web_publication_catalog.dart' show PublicationConnectionRequired;
 
@@ -99,6 +100,9 @@ class NovelFeedController extends ChangeNotifier {
   Object? error;
   String get failureMessage {
     final failure = error;
+    if (failure is OnlineComponentUnavailable) {
+      return '这个构建没有内置在线书目。想看文库的书，请在「本地」页右上角点地球图标（文库书源），按书名或编号搜索后下载。';
+    }
     if (failure is PublicationConnectionRequired) {
       return '此出版文库需要官网账号连接，请到账号页确认后重试。';
     }

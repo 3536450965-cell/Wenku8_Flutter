@@ -26,11 +26,11 @@ class HomeNavigation extends ChangeNotifier {
   bool get localReader => _value.localReader;
   bool get combinedShelf => _value.combinedShelf;
   bool get readableShelfOnly => cachedShelf || localReader;
-  List<int> get tabs {
-    if (localReader) return combinedShelf ? const [1, 3] : const [2, 3];
-    if (combinedShelf) return cachedShelf ? const [1, 3] : const [0, 1, 3];
-    return cachedShelf ? const [1, 2, 3] : const [0, 1, 2, 3];
-  }
+  /// The library ships without the online discovery feed: every book comes in
+  /// through the Wenku8 source or a local file, so the dock only keeps the
+  /// shelf and the settings page. The other page identities stay allocated so
+  /// their state (and any deep link) still resolves.
+  List<int> get tabs => const [2, 3];
 
   int destination(int current) => tabs.contains(current)
       ? current

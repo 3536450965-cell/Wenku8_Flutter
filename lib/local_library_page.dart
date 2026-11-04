@@ -20,6 +20,7 @@ import 'cloud_sources.dart';
 import 'dock_layout.dart';
 import 'glass_choices.dart';
 import 'library_state.dart';
+import 'wenku8_page.dart';
 import 'library_toolbar.dart';
 import 'library_reflow.dart';
 import 'local_books.dart';
@@ -60,6 +61,7 @@ Widget _localLibraryHeader(
   BuildContext context,
   LocalLibraryController? controller, {
   bool back = false,
+  VoidCallback? onOnline,
 }) {
   Widget header() => Row(
     children: [
@@ -70,7 +72,7 @@ Widget _localLibraryHeader(
           onPressed: () => Navigator.pop(context),
         ),
       const Expanded(
-        child: ArchiveMasthead(title: '本地', code: '03 / LOCAL ARCHIVE'),
+        child: ArchiveMasthead(title: '书架', code: '02 / SHELF'),
       ),
       GlassMenuAnchor(
         child: Builder(
@@ -121,8 +123,12 @@ class LocalLibraryPage extends StatefulWidget {
   final BookDocuments? documents;
   final CloudSourceSettings? cloudSettings;
   final VoidCallback? onSearch;
-  Widget buildHeader(BuildContext context) =>
-      _localLibraryHeader(context, controller, back: showHeader);
+  Widget buildHeader(BuildContext context) => _localLibraryHeader(
+    context,
+    controller,
+    back: showHeader,
+    onOnline: () => openWenku8Source(context, books),
+  );
 
   @override
   State<LocalLibraryPage> createState() => _LocalLibraryPageState();
@@ -801,8 +807,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     super.dispose();
   }
 
-  Widget _header(BuildContext context) =>
-      _localLibraryHeader(context, _controller, back: true);
+  Widget _header(BuildContext context) => _localLibraryHeader(
+    context,
+    _controller,
+    back: true,
+    onOnline: () => openWenku8Source(context, widget.books),
+  );
   @override
   Widget build(BuildContext context) {
     final organization = _organization;

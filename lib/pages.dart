@@ -38,6 +38,7 @@ import 'book_grid_density.dart';
 import 'book_categories.dart';
 import 'bookshelf_scope.dart';
 import 'book_source_badge.dart';
+import 'wenku8_page.dart';
 import 'book_search.dart';
 import 'blocked_tags_controls.dart';
 import 'catalog.dart';
@@ -69,7 +70,6 @@ import 'local_book_importer.dart';
 import 'local_text_reference.dart';
 import 'local_text_recovery.dart';
 import 'native_effects.dart' show NativeGlassGroup;
-import 'lan_handoff_widgets.dart';
 import 'network_status.dart';
 import 'novel_feed_controller.dart';
 import 'offline_repository.dart';
@@ -163,8 +163,8 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
   static const _dockItems = [
     GlassDockItem(CupertinoIcons.house, '发现'),
     GlassDockItem(CupertinoIcons.book, '书架', symbol: ArchiveSymbol.shelf),
-    GlassDockItem(CupertinoIcons.folder, '本地'),
-    GlassDockItem(CupertinoIcons.person_crop_circle, '我的'),
+    GlassDockItem(CupertinoIcons.book, '书架', symbol: ArchiveSymbol.shelf),
+    GlassDockItem(CupertinoIcons.square_stack, '书架', symbol: ArchiveSymbol.shelf),
   ];
   late final _catalog = NovelFeedController(
     widget.repository,
@@ -202,7 +202,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
   final _localLibrary = LocalLibraryController();
   List<Widget> _pageWidgets = const [];
   List<WidgetBuilder> _headers = const [];
-  int _tab = 0;
+  int _tab = 2;
   double _tabDirection = 1;
   int? _outgoingTab;
   bool _searchOpen = false;
@@ -307,8 +307,15 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     _headers = [
       discover.buildHeader,
       shelf.buildHeader,
-      localPage?.buildHeader ??
-          (_) => const ArchiveMasthead(title: '本地', code: '03 / LOCAL ARCHIVE'),
+      localPage == null
+          ? (_) => const ArchiveMasthead(title: '书架', code: '02 / SHELF')
+          : (context) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                localPage.buildHeader(context),
+                if (_localBooks case final books?) Wenku8EntryBar(books: books),
+              ],
+            ),
       settings.buildHeader,
     ];
     _pageWidgets =
