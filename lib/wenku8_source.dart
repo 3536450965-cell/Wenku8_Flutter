@@ -751,6 +751,10 @@ p.figure img { max-width: 100%; height: auto; }
     <dc:creator>${_escape(book.author)}</dc:creator>
     <dc:language>zh</dc:language>
     <dc:description>${_escape(book.summary)}</dc:description>
+    <dc:subject>${_escape(book.category)}</dc:subject>
+    <meta name="wenku8:complete" content="${book.status.contains('完结') ? '1' : '0'}"/>
+    <meta name="wenku8:updated" content="${_escape(book.updated)}"/>
+    <meta name="wenku8:status" content="${_escape(book.status)}"/>
     <meta property="dcterms:modified">1990-01-01T00:00:00Z</meta>
 ${cover == null ? '' : '    <meta name="cover" content="cover-image"/>'}
   </metadata>

@@ -185,8 +185,25 @@ class Wenku8Index {
         final initials = _initialsOf(entry);
         if (initials.startsWith(needle)) {
           score = 2;
-        } else if (_subsequence(needle, initials)) {
+        } else if (initials.length >= needle.length &&
+            _editDistanceAtMostOne(needle, initials.substring(0, needle.length))) {
+          // One wrong initial in the prefix: bdnj for bbnj.
+          score = 2;
+        } else if (needle.length >= 3 && _fuzzyContains(needle, initials)) {
+          // Forgive one wrong initial, e.g. bdnj for bbnj. This ranks above a
+          // loose subsequence hit, which tends to be an unrelated title.
           score = 3;
+        } else if (_subsequence(needle, initials)) {
+          score = 4;
+        }
+      }
+      if (score < 0 && needle.length >= 2) {
+        // One wrong/extra/missing character still counts, so a typo such as
+        // 败北女角真多了 still finds the book.
+        if (_fuzzyContains(needle, title)) {
+          score = 5;
+        } else if (author.isNotEmpty && _fuzzyContains(needle, author)) {
+          score = 6;
         }
       }
       if (score >= 0) hits.add((score, entry.title.length, entry));
@@ -207,6 +224,50 @@ class Wenku8Index {
 
   String _initialsOf(Wenku8IndexEntry entry) =>
       _initialsCache[entry.id] ??= pinyinInitials(entry.title);
+
+  /// True when [needle] occurs in [haystack] with at most one edit, which is
+  /// enough to forgive a typo without pulling in unrelated titles.
+  static bool _fuzzyContains(String needle, String haystack) {
+    final n = needle.length;
+    if (n < 2 || haystack.length + 1 < n) return false;
+    for (var start = 0; start <= haystack.length - n + 1; start++) {
+      for (final window in [n - 1, n, n + 1]) {
+        if (window <= 0) continue;
+        final end = start + window;
+        if (end > haystack.length) continue;
+        if (_editDistanceAtMostOne(needle, haystack.substring(start, end))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static bool _editDistanceAtMostOne(String a, String b) {
+    if (a == b) return true;
+    final delta = a.length - b.length;
+    if (delta > 1 || delta < -1) return false;
+    var i = 0;
+    var j = 0;
+    var edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] == b[j]) {
+        i++;
+        j++;
+        continue;
+      }
+      if (++edits > 1) return false;
+      if (delta == 0) {
+        i++;
+        j++;
+      } else if (delta > 0) {
+        i++;
+      } else {
+        j++;
+      }
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  }
 
   static bool _subsequence(String needle, String haystack) {
     var index = 0;

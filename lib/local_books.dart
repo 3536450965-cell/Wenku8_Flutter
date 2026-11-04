@@ -225,17 +225,21 @@ Novel _novel(
   String? cover,
   BookNavigation? navigation,
   String summary = '已保存到本地书库，可离线阅读。',
+  String genre = '本地导入',
+  bool isComplete = true,
+  String? lastUpdate,
 }) => Novel(
   id: id,
   title: _metadataText(title),
   author: author.isEmpty ? '本地书籍' : _metadataText(author),
-  genre: '本地导入',
+  genre: genre.isEmpty ? '本地导入' : _metadataText(genre),
   summary: summary,
   colors: const [Color(0xFF646464), Color(0xFF303030)],
   chapters: List.unmodifiable(chapters),
   chapterCount: chapters.length,
-  isComplete: true,
+  isComplete: isComplete,
   coverUrl: cover,
+  lastUpdate: lastUpdate,
   navigation: navigation,
 );
 
@@ -1335,6 +1339,7 @@ ImportedBook _epub(
           .map((e) => e.getAttribute('content') ?? e.innerText.trim())
           .firstOrNull ??
       '';
+  final subject = field('subject').trim();
   final collection = meta('calibre:series').isNotEmpty
       ? meta('calibre:series')
       : meta('belongs-to-collection');
@@ -1356,6 +1361,11 @@ ImportedBook _epub(
       chapters,
       cover: coverUrl,
       navigation: navigation,
+      genre: subject,
+      isComplete: meta('wenku8:complete').trim() != '0',
+      lastUpdate: meta('wenku8:updated').trim().isEmpty
+          ? null
+          : meta('wenku8:updated').trim(),
       summary: damage.isEmpty
           ? '已保存到本地书库，可离线阅读。'
           : '已导入可读部分，${damagedChapters.length} 个章节无法读取，已发现 ${damage.length} 处资源问题。原文件未改动，请重新获取完整原件。',

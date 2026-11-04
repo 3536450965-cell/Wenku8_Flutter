@@ -313,7 +313,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
               mainAxisSize: MainAxisSize.min,
               children: [
                 localPage.buildHeader(context),
-                if (_localBooks case final books?) Wenku8EntryBar(books: books),
+                if (_localBooks case final books?) Wenku8EntryBar(books: books, state: widget.state),
               ],
             ),
       settings.buildHeader,

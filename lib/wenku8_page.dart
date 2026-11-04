@@ -6,23 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'catalog.dart';
+import 'library_state.dart';
 import 'local_books.dart';
 import 'wenku8_index.dart';
 import 'wenku8_source.dart';
 
 /// Opens the online source page from the shelf header.
-Future<bool?> openWenku8Source(BuildContext context, LocalBookStore books) =>
-    Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => Wenku8Page(books: books)),
-    );
+Future<bool?> openWenku8Source(
+  BuildContext context,
+  LocalBookStore books, {
+  LibraryState? state,
+}) => Navigator.of(context).push<bool>(
+  MaterialPageRoute(builder: (_) => Wenku8Page(books: books, state: state)),
+);
 
 /// Always-visible entry for the Wenku8 source. It lives in the shelf header,
 /// above whatever shelf view is showing, so the source is reachable from the
 /// automatic shelf and the plain list alike.
 class Wenku8EntryBar extends StatelessWidget {
-  const Wenku8EntryBar({super.key, required this.books});
+  const Wenku8EntryBar({super.key, required this.books, this.state});
 
   final LocalBookStore books;
+  final LibraryState? state;
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +40,7 @@ class Wenku8EntryBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () => openWenku8Source(context, books),
+          onTap: () => openWenku8Source(context, books, state: state),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             child: Row(
@@ -75,18 +80,32 @@ class Wenku8EntryBar extends StatelessWidget {
 
 /// One queued download: the book, the volumes to fetch and its live status.
 class _Job {
-  _Job({required this.book, required this.volumes, required this.chapters});
+  _Job({
+    required this.book,
+    required this.volumes,
+    required this.chapters,
+    this.forceFull = false,
+  });
 
   final Wenku8Book book;
   List<Wenku8Volume> volumes;
   int chapters;
   String? status;
+
+  /// Ignore what is already imported and fetch every chapter again.
+  final bool forceFull;
 }
 
 class Wenku8Page extends StatefulWidget {
-  const Wenku8Page({super.key, required this.books, this.onImported});
+  const Wenku8Page({
+    super.key,
+    required this.books,
+    this.state,
+    this.onImported,
+  });
 
   final LocalBookStore books;
+  final LibraryState? state;
   final void Function(Novel novel)? onImported;
 
   @override
@@ -107,16 +126,29 @@ class _Wenku8PageState extends State<Wenku8Page> {
   String? _hint;
   bool _busy = false;
 
-  final List<_Job> _queue = <_Job>[];
-  bool _pumping = false;
-  bool _cancelRequested = false;
-  int _done = 0;
-  int _total = 0;
-  String? _runningTitle;
+  Wenku8Downloads get _downloads => Wenku8Downloads.instance;
+
+  List<_Job> get _queue => _downloads.queue;
+  bool get _pumping => _downloads.pumping;
+  int get _done => _downloads.done;
+  int get _total => _downloads.total;
+  String? get _runningTitle => _downloads.runningTitle;
+
+  @override
+  void initState() {
+    super.initState();
+    _downloads
+      ..attach(widget.books, widget.state)
+      ..addListener(_onDownloads);
+  }
+
+  void _onDownloads() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
-    _cancelRequested = true;
+    _downloads.removeListener(_onDownloads);
     _client.dispose();
     _input.dispose();
     super.dispose();
@@ -226,16 +258,55 @@ class _Wenku8PageState extends State<Wenku8Page> {
       0,
       (sum, volume) => sum + volume.chapters.length,
     );
-    _queue.add(_Job(book: book, volumes: picked, chapters: chapters));
+    _downloads.enqueue(
+      _Job(book: book, volumes: picked, chapters: chapters),
+    );
     setState(() {
       _error = null;
       _hint = '已加入队列：《${book.title}》$chapters 章';
     });
-    unawaited(_pump());
   }
 
-  void _enqueueEntry(Wenku8IndexEntry entry) {
-    _queue.add(
+  void _enqueueBook(Wenku8Book book, {bool forceFull = false}) {
+    _downloads.enqueue(
+      _Job(
+        book: book,
+        volumes: const [],
+        chapters: 0,
+        forceFull: forceFull,
+      ),
+    );
+    setState(() {
+      _error = null;
+      _hint = forceFull
+          ? '已加入队列（重下）：《${book.title}》'
+          : '已加入队列：《${book.title}》';
+    });
+  }
+
+  void _enqueueEntry(
+    Wenku8IndexEntry entry, {
+    bool forceFull = false,
+    bool incremental = false,
+  }) {
+    if (incremental || forceFull) {
+      _enqueueBook(
+        Wenku8Book(
+          id: '${entry.id}',
+          title: entry.title,
+          author: entry.author,
+          category: entry.category,
+          status: entry.status,
+          length: entry.lengthLabel,
+          updated: '',
+          summary: '',
+          coverUrl: null,
+        ),
+        forceFull: forceFull,
+      );
+      return;
+    }
+    _downloads.enqueue(
       _Job(
         book: Wenku8Book(
           id: '${entry.id}',
@@ -253,141 +324,8 @@ class _Wenku8PageState extends State<Wenku8Page> {
       ),
     );
     setState(() => _hint = '已加入队列：《${entry.title}》');
-    unawaited(_pump());
   }
 
-  Future<void> _pump() async {
-    if (_pumping) return;
-    _pumping = true;
-    try {
-      while (_queue.isNotEmpty) {
-        if (_cancelRequested) {
-          setState(() {
-            _queue.clear();
-            _hint = '已取消';
-          });
-          break;
-        }
-        final job = _queue.first;
-        await _run(job);
-        _queue.remove(job);
-        if (mounted) setState(() {});
-      }
-    } finally {
-      _pumping = false;
-      if (mounted) {
-        setState(() {
-          _runningTitle = null;
-          _done = 0;
-          _total = 0;
-        });
-      }
-    }
-  }
-
-  Future<void> _run(_Job job) async {
-    final existing = _shelf[job.book.title.toLowerCase()];
-    if (existing != null) {
-      final replace = await _confirmReplace(job.book.title, existing.chapters);
-      if (!replace) {
-        job.status = '已在书架，跳过';
-        if (mounted) setState(() {});
-        return;
-      }
-      await widget.books.remove(existing.id);
-    }
-    if (job.volumes.isEmpty) {
-      try {
-        if (mounted) {
-          setState(() {
-            _runningTitle = job.book.title;
-            _total = 0;
-            _done = 0;
-          });
-          job.status = '读取章节表…';
-        }
-        final volumes = await _client.catalog(job.book.id);
-        if (volumes.isEmpty) {
-          job.status = '没有可下载的章节';
-          return;
-        }
-        job.volumes = volumes;
-        job.chapters = volumes.fold<int>(
-          0,
-          (sum, volume) => sum + volume.chapters.length,
-        );
-      } catch (error) {
-        job.status = '读取章节表失败：$error';
-        return;
-      }
-    }
-    if (mounted) {
-      setState(() {
-        _runningTitle = job.book.title;
-        _done = 0;
-        _total = job.chapters;
-        _cancelRequested = false;
-      });
-    }
-    try {
-      final download = await _client.download(
-        job.book,
-        job.volumes,
-        isCancelled: () => _cancelRequested,
-        onProgress: (done, total) {
-          if (!mounted) return;
-          setState(() {
-            _done = done;
-            _total = total;
-          });
-        },
-      );
-      if (_cancelRequested) throw Wenku8Exception('已取消。');
-      final bytes = _client.epub(download);
-      final directory = await getTemporaryDirectory();
-      final file = File(
-        '${directory.path}/wenku8-${job.book.id}-'
-        '${DateTime.now().millisecondsSinceEpoch}.epub',
-      );
-      await file.writeAsBytes(bytes, flush: true);
-      final novel = await widget.books.importFile(job.book.fileName, file.path);
-      await file.delete().catchError((_) => file);
-      widget.onImported?.call(novel);
-      final notes = [
-        if (download.skipped.isNotEmpty) '跳过 ${download.skipped.length} 节空章节',
-        if (download.failed.isNotEmpty) '${download.failed.length} 节下载失败',
-      ];
-      job.status = notes.isEmpty
-          ? '已导入《${novel.title}》'
-          : '已导入《${novel.title}》（${notes.join('，')}）';
-    } catch (error) {
-      job.status = '$error';
-    }
-  }
-
-  Future<bool> _confirmReplace(String title, int localChapters) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('书架里已经有这本书'),
-        content: Text(
-          '《$title》本地已有 $localChapters 章。重新下载会替换旧书，'
-          '阅读进度可能回到开头。继续吗？',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('跳过'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('替换'),
-          ),
-        ],
-      ),
-    );
-    return result ?? false;
-  }
 
   Future<void> _showEntryActions(Wenku8IndexEntry entry) async {
     final action = await showModalBottomSheet<String>(
@@ -417,11 +355,29 @@ class _Wenku8PageState extends State<Wenku8Page> {
               title: const Text('加入下载队列'),
               onTap: () => Navigator.of(context).pop('queue'),
             ),
+            ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('更新已下载的书（只补新章）'),
+              onTap: () => Navigator.of(context).pop('update'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('强制重新下载整本'),
+              onTap: () => Navigator.of(context).pop('redownload'),
+            ),
           ],
         ),
       ),
     );
     if (!mounted || action == null) return;
+    if (action == 'update') {
+      _enqueueEntry(entry, incremental: true);
+      return;
+    }
+    if (action == 'redownload') {
+      _enqueueEntry(entry, forceFull: true);
+      return;
+    }
     _enqueueEntry(entry);
     if (action == 'download' && !_pumping) {
       _input.text = '${entry.id}';
@@ -538,7 +494,7 @@ class _Wenku8PageState extends State<Wenku8Page> {
               if (_pumping)
                 TextButton(
                   onPressed: () {
-                    _cancelRequested = true;
+                    _downloads.cancel();
                     setState(() {});
                   },
                   child: const Text('取消'),
@@ -681,6 +637,12 @@ class _Wenku8PageState extends State<Wenku8Page> {
                           style: muted,
                         ),
                       ),
+                      TextButton(
+                        onPressed: busy
+                            ? null
+                            : () => _enqueueBook(book, forceFull: false),
+                        child: const Text('检查更新'),
+                      ),
                     ],
                   );
                 },
@@ -776,5 +738,254 @@ class _Wenku8Cover extends StatelessWidget {
                   progress == null ? child : placeholder,
             ),
     );
+  }
+}
+
+
+/// The download queue lives here rather than in the page, so a download keeps
+/// running while the reader moves on to other books.
+class Wenku8Downloads extends ChangeNotifier {
+  Wenku8Downloads._();
+
+  static final Wenku8Downloads instance = Wenku8Downloads._();
+
+  final Wenku8Client _client = Wenku8Client();
+  final List<_Job> queue = <_Job>[];
+
+  LocalBookStore? books;
+  LibraryState? state;
+
+  bool pumping = false;
+  bool cancelRequested = false;
+  int done = 0;
+  int total = 0;
+  String? runningTitle;
+
+  void attach(LocalBookStore store, LibraryState? libraryState) {
+    books = store;
+    state = libraryState;
+  }
+
+  void enqueue(_Job job) {
+    queue.add(job);
+    notifyListeners();
+    unawaited(_pump());
+  }
+
+  void cancel() {
+    cancelRequested = true;
+    notifyListeners();
+  }
+
+  Future<void> _pump() async {
+    if (pumping) return;
+    pumping = true;
+    notifyListeners();
+    try {
+      while (queue.isNotEmpty) {
+        if (cancelRequested) {
+          queue.clear();
+          break;
+        }
+        final job = queue.first;
+        await _run(job);
+        queue.remove(job);
+        notifyListeners();
+      }
+    } finally {
+      pumping = false;
+      runningTitle = null;
+      done = 0;
+      total = 0;
+      cancelRequested = false;
+      notifyListeners();
+    }
+  }
+
+  Novel? _localFor(LocalBookStore store, String title) {
+    final wanted = title.trim().toLowerCase();
+    for (final novel in store.books) {
+      if (novel.title.trim().toLowerCase() == wanted) return novel;
+    }
+    for (final novel in store.books) {
+      if (novel.title.trim().toLowerCase().startsWith(wanted)) return novel;
+    }
+    return null;
+  }
+
+  Future<List<Wenku8Volume>> _loadCatalog(
+    _Job job,
+    List<Wenku8Volume> known,
+  ) async {
+    if (known.isNotEmpty) return known;
+    job.status = '读取章节表…';
+    notifyListeners();
+    try {
+      final volumes = await _client.catalog(job.book.id);
+      if (volumes.isEmpty) {
+        job.status = '没有可下载的章节';
+        notifyListeners();
+        return const [];
+      }
+      job.volumes = volumes;
+      job.chapters = volumes.fold<int>(
+        0,
+        (sum, volume) => sum + volume.chapters.length,
+      );
+      notifyListeners();
+      return volumes;
+    } catch (error) {
+      job.status = '读取章节表失败：$error';
+      notifyListeners();
+      return const [];
+    }
+  }
+
+  /// Matches imported chapters against the fresh catalog by title, so an update
+  /// only fetches what is new instead of the whole book again.
+  Future<({Map<String, String> bodies, List<Wenku8Volume> missing, int reused})>
+  _planIncremental(
+    LocalBookStore store,
+    Novel local,
+    List<Wenku8Volume> catalog,
+  ) async {
+    final flat = [for (final volume in catalog) ...volume.chapters];
+    final bodies = <String, String>{};
+    var cursor = 0;
+    var reused = 0;
+    for (final chapter in local.chapters) {
+      final wanted = chapter.title.trim();
+      var found = -1;
+      for (var i = cursor; i < flat.length; i++) {
+        if (flat[i].title.trim() == wanted) {
+          found = i;
+          break;
+        }
+      }
+      if (found < 0) continue;
+      final text = await store.chapterContent(local.id, chapter);
+      if (text.trim().isEmpty) continue;
+      bodies[flat[found].id] = text;
+      cursor = found + 1;
+      reused++;
+    }
+    final missing = <Wenku8Volume>[];
+    for (final volume in catalog) {
+      final copy = Wenku8Volume(volume.title);
+      for (final chapter in volume.chapters) {
+        if (!bodies.containsKey(chapter.id)) copy.chapters.add(chapter);
+      }
+      if (copy.chapters.isNotEmpty) missing.add(copy);
+    }
+    return (bodies: bodies, missing: missing, reused: reused);
+  }
+
+  List<Wenku8Volume> _mergeVolumes(
+    List<Wenku8Volume> catalog,
+    Map<String, String> bodies,
+  ) {
+    final merged = <Wenku8Volume>[];
+    for (final volume in catalog) {
+      final copy = Wenku8Volume(volume.title);
+      for (final chapter in volume.chapters) {
+        if (bodies.containsKey(chapter.id)) copy.chapters.add(chapter);
+      }
+      if (copy.chapters.isNotEmpty) merged.add(copy);
+    }
+    return merged;
+  }
+
+  Future<void> _run(_Job job) async {
+    final store = books;
+    if (store == null) return;
+    final local = job.forceFull ? null : _localFor(store, job.book.title);
+    var reused = const <String, String>{};
+    var reusedCount = 0;
+
+    var catalog = await _loadCatalog(job, job.volumes);
+    if (catalog.isEmpty) return;
+
+    if (local != null) {
+      final plan = await _planIncremental(store, local, catalog);
+      reused = plan.bodies;
+      reusedCount = plan.reused;
+      if (plan.missing.isEmpty && reusedCount > 0) {
+        job.status = '已是最新（$reusedCount 章）';
+        notifyListeners();
+        return;
+      }
+      job.volumes = plan.missing.isEmpty ? catalog : plan.missing;
+      job.chapters = job.volumes.fold<int>(
+        0,
+        (sum, volume) => sum + volume.chapters.length,
+      );
+    }
+
+    runningTitle = job.book.title;
+    done = 0;
+    total = job.chapters;
+    cancelRequested = false;
+    notifyListeners();
+    try {
+      final download = await _client.download(
+        job.book,
+        job.volumes,
+        isCancelled: () => cancelRequested,
+        onProgress: (value, maximum) {
+          done = value;
+          total = maximum;
+          notifyListeners();
+        },
+      );
+      if (cancelRequested) throw Wenku8Exception('已取消。');
+      final bodies = <String, String>{...reused, ...download.chapters};
+      final merged = Wenku8Download(
+        job.book,
+        _mergeVolumes(catalog, bodies),
+        bodies,
+        images: download.images,
+        skipped: download.skipped,
+        failed: download.failed,
+        cover: download.cover,
+      );
+      final bytes = _client.epub(merged);
+      final directory = await getTemporaryDirectory();
+      final file = File(
+        '${directory.path}/wenku8-${job.book.id}-'
+        '${DateTime.now().millisecondsSinceEpoch}.epub',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      final position = local == null ? null : state?.positionFor(local.id);
+      if (local != null) await store.remove(local.id);
+      final novel = await store.importFile(job.book.fileName, file.path);
+      await file.delete().catchError((_) => file);
+      if (position != null) {
+        await state?.savePosition(
+          novel: novel,
+          chapter: position.chapter.clamp(0, novel.chapters.length - 1),
+          offset: position.offset,
+          maximum: position.offset.abs() + 1,
+          width: position.width,
+          paragraphIndex: position.paragraphIndex,
+          paragraphFraction: position.paragraphFraction,
+          textOffset: position.textOffset,
+          textScale: position.textScale,
+          typeface: position.typeface,
+        );
+      }
+      final notes = [
+        if (reusedCount > 0) '复用 $reusedCount 章',
+        if (download.chapters.length > 0) '新增 ${download.chapters.length} 章',
+        if (download.skipped.isNotEmpty) '跳过 ${download.skipped.length} 节空章节',
+        if (download.failed.isNotEmpty) '${download.failed.length} 节下载失败',
+      ];
+      job.status = notes.isEmpty
+          ? '已导入《${novel.title}》'
+          : '已导入《${novel.title}》（${notes.join('，')}）';
+      notifyListeners();
+    } catch (error) {
+      job.status = '$error';
+      notifyListeners();
+    }
   }
 }

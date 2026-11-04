@@ -69,8 +69,10 @@ jobs:
             fi
           done
 
-      - name: Verify downloaded book imports
-        run: flutter test test/wenku8_epub_test.dart
+      - name: Verify downloads and search
+        run: |
+          flutter test test/wenku8_epub_test.dart
+          flutter test test/wenku8_search_test.dart
 
       - name: Build unsigned app
         run: |
