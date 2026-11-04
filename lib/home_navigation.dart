@@ -32,13 +32,14 @@ class HomeNavigation extends ChangeNotifier {
   /// their state (and any deep link) still resolves.
   List<int> get tabs => const [2, 3];
 
+  /// Maps any legacy page identity onto a dock slot that actually exists.
+  /// With the discovery feed gone, page 0/1 (feed, online shelf) resolve to the
+  /// shelf, and only page 3 keeps its own slot.
   int destination(int current) => tabs.contains(current)
       ? current
-      : localReader
-      ? combinedShelf
-            ? 1
-            : 2
-      : 1;
+      : current == 3
+      ? 3
+      : 2;
 
   void _changed() {
     final next = _read();

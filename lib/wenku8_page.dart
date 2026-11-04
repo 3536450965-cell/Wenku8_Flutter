@@ -424,8 +424,31 @@ class _Wenku8PageState extends State<Wenku8Page> {
   Widget _brandHeader(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final canPop = Navigator.of(context).canPop();
     return Row(
       children: [
+        if (canPop)
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Material(
+              color: Colors.transparent,
+              shape: const CircleBorder(),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: () => Navigator.of(context).maybePop(),
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Icon(
+                    CupertinoIcons.back,
+                    size: 21,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ClipRRect(
           borderRadius: BorderRadius.circular(14),
           child: Container(
@@ -561,22 +584,14 @@ class _Wenku8PageState extends State<Wenku8Page> {
 
     return Scaffold(
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          MediaQuery.paddingOf(context).top + 6,
+          20,
+          32,
+        ),
         children: [
           _brandHeader(context),
-          if (_pumping) ...[
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () {
-                  _downloads.cancel();
-                  setState(() {});
-                },
-                child: const Text('取消下载'),
-              ),
-            ),
-          ],
           if (_busy && !_pumping)
             const Padding(
               padding: EdgeInsets.only(top: 16),
@@ -596,6 +611,16 @@ class _Wenku8PageState extends State<Wenku8Page> {
               style: muted,
             ),
             if (_queue.length > 1) Text('队列里还有 ${_queue.length - 1} 本', style: muted),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () {
+                  _downloads.cancel();
+                  setState(() {});
+                },
+                child: const Text('取消下载'),
+              ),
+            ),
           ],
           if (_queue.isNotEmpty) ...[
             const SizedBox(height: 10),
