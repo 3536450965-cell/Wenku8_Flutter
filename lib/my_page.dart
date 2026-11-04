@@ -29,7 +29,7 @@ class MyPage extends StatelessWidget {
 
   Widget buildHeader(BuildContext context) => const Align(
     alignment: Alignment.centerLeft,
-    child: ArchiveMasthead(title: '我的', code: '04 / PERSONAL ARCHIVE'),
+    child: ArchiveMasthead(title: '我的', code: 'PERSONAL ARCHIVE'),
   );
 
   @override

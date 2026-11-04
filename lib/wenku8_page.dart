@@ -10,14 +10,19 @@ import 'library_state.dart';
 import 'local_books.dart';
 import 'wenku8_index.dart';
 import 'wenku8_source.dart';
+import 'wenku8_updates.dart';
 
 /// Opens the online source page from the shelf header.
 Future<bool?> openWenku8Source(
   BuildContext context,
   LocalBookStore books, {
   LibraryState? state,
+  String? initialQuery,
 }) => Navigator.of(context).push<bool>(
-  MaterialPageRoute(builder: (_) => Wenku8Page(books: books, state: state)),
+  MaterialPageRoute(
+    builder: (_) =>
+        Wenku8Page(books: books, state: state, initialQuery: initialQuery),
+  ),
 );
 
 /// Always-visible entry for the Wenku8 source. It lives in the shelf header,
@@ -102,11 +107,13 @@ class Wenku8Page extends StatefulWidget {
     required this.books,
     this.state,
     this.onImported,
+    this.initialQuery,
   });
 
   final LocalBookStore books;
   final LibraryState? state;
   final void Function(Novel novel)? onImported;
+  final String? initialQuery;
 
   @override
   State<Wenku8Page> createState() => _Wenku8PageState();
@@ -140,6 +147,13 @@ class _Wenku8PageState extends State<Wenku8Page> {
     _downloads
       ..attach(widget.books, widget.state)
       ..addListener(_onDownloads);
+    final initial = widget.initialQuery?.trim();
+    if (initial != null && initial.isNotEmpty) {
+      _input.text = initial;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _search();
+      });
+    }
   }
 
   void _onDownloads() {
@@ -510,6 +524,66 @@ class _Wenku8PageState extends State<Wenku8Page> {
     );
   }
 
+  Widget _searchBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 18, bottom: 4),
+      child: TextField(
+        controller: _input,
+        textInputAction: TextInputAction.search,
+        onSubmitted: (_) => _search(),
+        decoration: InputDecoration(
+          hintText: '书名 / 作者 / 编号 / 链接',
+          isDense: true,
+          prefixIcon: const Icon(CupertinoIcons.search, size: 18),
+          suffixIcon: IconButton(
+            tooltip: '搜索',
+            icon: const Icon(CupertinoIcons.arrow_right_circle_fill, size: 20),
+            onPressed: _search,
+          ),
+          filled: true,
+          fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkShelfUpdates() async {
+    final watcher = Wenku8Updates.instance;
+    if (watcher == null) {
+      _say('书架还没准备好，回书架页面再试一次。');
+      return;
+    }
+    await watcher.check(force: true);
+    if (!mounted) return;
+    final failures = watcher.error;
+    if (failures != null) {
+      _say('检查没成功：$failures');
+      return;
+    }
+    final noticed = watcher.notices;
+    _say(
+      noticed.isEmpty
+          ? '全部是最新的。'
+          : '有 ${noticed.length} 本可以更新，回书架顶部点提示即可更新。',
+    );
+  }
+
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Future<void> _openSearchSheet() {
     return showModalBottomSheet<void>(
       context: context,
@@ -565,6 +639,13 @@ class _Wenku8PageState extends State<Wenku8Page> {
                   },
                   child: const Text('清理下载缓存'),
                 ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(sheet).pop();
+                    _checkShelfUpdates();
+                  },
+                  child: const Text('检查书架更新'),
+                ),
               ],
             ),
           ],
@@ -596,6 +677,7 @@ class _Wenku8PageState extends State<Wenku8Page> {
         ),
         children: [
           _brandHeader(context),
+          _searchBar(context),
           if (_busy && !_pumping)
             const Padding(
               padding: EdgeInsets.only(top: 16),

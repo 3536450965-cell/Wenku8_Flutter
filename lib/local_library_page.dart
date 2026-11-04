@@ -21,6 +21,7 @@ import 'dock_layout.dart';
 import 'glass_choices.dart';
 import 'library_state.dart';
 import 'wenku8_page.dart';
+import 'wenku8_updates.dart';
 import 'library_toolbar.dart';
 import 'library_reflow.dart';
 import 'local_books.dart';
@@ -63,25 +64,37 @@ Widget _localLibraryHeader(
   bool back = false,
   VoidCallback? onOnline,
 }) {
-  Widget header() => Row(
+  Widget header() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      if (back)
-        GlassIconButton(
-          icon: CupertinoIcons.back,
-          label: '返回',
-          onPressed: () => Navigator.pop(context),
-        ),
-      const Expanded(
-        child: ArchiveMasthead(title: '书架', code: '02 / SHELF'),
+      Row(
+        children: [
+          if (back)
+            GlassIconButton(
+              icon: CupertinoIcons.back,
+              label: '返回',
+              onPressed: () => Navigator.pop(context),
+            ),
+          Expanded(
+            child: _ShelfBrandHeader(
+              title: onOnline == null ? '书架' : '轻小说文库',
+              subtitle: onOnline == null
+                  ? 'SHELF'
+                  : 'WENKU8 / READING ARCHIVE',
+              onPressed: onOnline,
+            ),
+          ),
+          if (onOnline != null) ...[
+            const SizedBox(width: 10),
+            _RoundSourceButton(onPressed: onOnline),
+          ],
+        ],
       ),
-      if (onOnline != null)
-        GlassIconButton(
-          key: const ValueKey('local-online-source'),
-          icon: CupertinoIcons.globe,
-          label: '轻小说文库',
-          onPressed: onOnline,
-        ),
-      GlassMenuAnchor(
+      const SizedBox(height: 2),
+      Row(
+        children: [
+          const Spacer(),
+          GlassMenuAnchor(
         child: Builder(
           builder: (anchor) => GlassIconButton(
             key: const ValueKey('local-import-book'),
@@ -93,11 +106,13 @@ Widget _localLibraryHeader(
           ),
         ),
       ),
-      GlassIconButton(
-        key: const ValueKey('local-search'),
-        icon: CupertinoIcons.search,
-        label: '搜索本地书籍',
-        onPressed: controller?.search,
+          GlassIconButton(
+            key: const ValueKey('local-search'),
+            icon: CupertinoIcons.search,
+            label: '搜索本地书籍',
+            onPressed: controller?.search,
+          ),
+        ],
       ),
     ],
   );
@@ -157,6 +172,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   bool _searchOpen = false;
   BookSync? _sync;
   LocalLibraryPreferences? _organization;
+  late final _updates = Wenku8Updates(books: widget.books);
   final _gridViewport = ValueNotifier<BookGridViewport?>(null);
   String? _error;
   bool _importing = false;
@@ -317,7 +333,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     // Keep data invalidation cheap even while this retained tab is offstage.
     // Import progress, keyboard and viewport changes reuse the ordered books.
     _bookChanges.addListener(_invalidateBooks);
+    _updates.addListener(_onUpdates);
     _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _updates.check();
+    });
+  }
+
+  void _onUpdates() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -808,10 +832,104 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     _bookChanges.removeListener(_invalidateBooks);
     _organization?.removeListener(_invalidateBooks);
     if (widget.cloudSettings == null) _cloudSources.dispose();
+    _updates
+      ..removeListener(_onUpdates)
+      ..dispose();
     _search.dispose();
     _gridViewport.dispose();
     _searchFocus.dispose();
     super.dispose();
+  }
+
+  Widget _updateBanner() {
+    final noticed = _updates.notices;
+    if (noticed.isEmpty) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Material(
+        color: const Color(0xFFFFF6D6),
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const ValueKey('shelf-update-banner'),
+          onTap: _openUpdates,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.auto_awesome,
+                  size: 17,
+                  color: Color(0xFF8C6500),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${noticed.length} 本书有更新',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF6B4E00),
+                    ),
+                  ),
+                ),
+                const Text(
+                  '去更新',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF8C6500),
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right,
+                  size: 17,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openUpdates() async {
+    final noticed = _updates.notices;
+    if (noticed.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          children: [
+            Text('有更新的书', style: Theme.of(sheet).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            for (final notice in noticed)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(notice.book.title),
+                subtitle: Text(
+                  '本地 ${notice.localChapters} 章 / 站点 ${notice.remoteChapters} 章',
+                ),
+                trailing: TextButton(
+                  onPressed: () {
+                    Navigator.of(sheet).pop();
+                    openWenku8Source(
+                      context,
+                      widget.books,
+                      state: widget.state,
+                      initialQuery: notice.id,
+                    );
+                  },
+                  child: const Text('更新'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _header(BuildContext context) => _localLibraryHeader(
@@ -881,6 +999,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            _updateBanner(),
                             if (mixed)
                               _shelfToolbar(organization!, featured.length)
                             else ...[
@@ -1091,5 +1210,114 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       ),
     );
     return widget.showHeader ? Scaffold(body: Atmosphere(child: body)) : body;
+  }
+}
+
+/// Brand block that replaced the "书架 / 02 / SHELF" masthead.
+class _ShelfBrandHeader extends StatelessWidget {
+  const _ShelfBrandHeader({
+    required this.title,
+    required this.subtitle,
+    this.onPressed,
+  });
+
+  final String title;
+  final String subtitle;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.asset(
+                'assets/branding/app-icon.png',
+                width: 44,
+                height: 44,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(
+                  width: 44,
+                  height: 44,
+                  color: scheme.primary,
+                  child: Icon(
+                    CupertinoIcons.book_solid,
+                    size: 20,
+                    color: scheme.onPrimary,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      height: 1.1,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      subtitle,
+                      maxLines: 1,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontSize: 10.5,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Round white button that opens the Wenku8 source, mirroring the reference.
+class _RoundSourceButton extends StatelessWidget {
+  const _RoundSourceButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      shape: const CircleBorder(),
+      elevation: 1,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: Icon(CupertinoIcons.search, size: 21, color: scheme.onSurface),
+        ),
+      ),
+    );
   }
 }

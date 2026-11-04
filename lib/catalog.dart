@@ -18,6 +18,7 @@ class Novel {
     this.lastUpdate,
     this.chapterCount = 0,
     this.navigation,
+    this.sourceId,
   });
 
   final int id;
@@ -32,6 +33,9 @@ class Novel {
   final String? lastUpdate;
   final int chapterCount;
   final BookNavigation? navigation;
+
+  /// Where a downloaded book came from, e.g. `wenku8:3057`.
+  final String? sourceId;
 
   /// Public directory rows can target any preserved reading section. A resource
   /// missing from the authored TOC remains reachable by normal page turns.

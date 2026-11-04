@@ -228,6 +228,7 @@ Novel _novel(
   String genre = '本地导入',
   bool isComplete = true,
   String? lastUpdate,
+  String? sourceId,
 }) => Novel(
   id: id,
   title: _metadataText(title),
@@ -241,6 +242,7 @@ Novel _novel(
   coverUrl: cover,
   lastUpdate: lastUpdate,
   navigation: navigation,
+  sourceId: sourceId,
 );
 
 /// Entries are decoded lazily, only after declared sizes and names are checked.
@@ -1362,6 +1364,9 @@ ImportedBook _epub(
       cover: coverUrl,
       navigation: navigation,
       genre: subject,
+      sourceId: meta('wenku8:id').trim().isEmpty
+          ? null
+          : 'wenku8:${meta('wenku8:id').trim()}',
       isComplete: meta('wenku8:complete').trim() != '0',
       lastUpdate: meta('wenku8:updated').trim().isEmpty
           ? null
