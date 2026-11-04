@@ -287,7 +287,11 @@ class Wenku8Client {
       RegExp(r'<title[^>]*>(.*?)</title>', dotAll: true),
     ]));
     final title = raw.split(' - ').first.trim();
-    if (title.isEmpty) throw Wenku8Exception('没有找到这本书，编号 $id 可能不存在。');
+    if (title.isEmpty || title.contains('出现错误') || title.contains('不存在')) {
+      // Missing ids answer with a generic error page instead of a 404, and its
+      // `<title>` would otherwise look like a book called 「出现错误」.
+      throw Wenku8Exception('没有找到这本书，编号 $id 可能不存在。');
+    }
     final summary = _clean(_slice(html, '内容简介', '</td>'))
         .replaceFirst(RegExp(r'^[:：\s]+'), '')
         .split('\n')
@@ -337,6 +341,21 @@ class Wenku8Client {
     final rest = html.substring(start + label.length);
     final end = rest.indexOf(until);
     return end < 0 ? rest : rest.substring(0, end);
+  }
+
+  /// Reads a book page, returning null when the id has no page.
+  ///
+  /// Used by the in-app new-book probe: GitHub's runners sit behind the site's
+  /// Cloudflare challenge, so the weekly index job cannot see new books but the
+  /// phone can.
+  Future<Wenku8Book?> peek(String id) async {
+    try {
+      return await book(id);
+    } on Wenku8Exception {
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<List<Wenku8Volume>> catalog(String id) async {

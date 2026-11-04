@@ -448,6 +448,63 @@ class _Wenku8PageState extends State<Wenku8Page> {
     setState(() => _hint = '已清理 $removed 个下载临时文件。');
   }
 
+  /// New titles take the next free id, so the probe walks forward from the
+  /// highest id the table knows and stops once the site keeps answering with
+  /// nothing. The phone reaches the site where GitHub's runners cannot (the
+  /// mirror answers them with a Cloudflare challenge), so this is what actually
+  /// grows the index in practice.
+  Future<void> _probeNewBooks() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _hint = '正在检查新书…';
+    });
+    try {
+      final index = _index ??= await Wenku8Index.load();
+      final found = <Wenku8IndexEntry>[];
+      var misses = 0;
+      var id = index.maxId + 1;
+      final last = id + 120;
+      while (id <= last && misses < 25) {
+        if (!mounted) return;
+        setState(() => _hint = '正在检查编号 $id …（已找到 ${found.length} 本）');
+        final book = await _client.peek('$id');
+        if (book == null) {
+          misses++;
+        } else {
+          misses = 0;
+          found.add(
+            Wenku8IndexEntry(
+              id: int.tryParse(book.id) ?? id,
+              title: book.title,
+              author: book.author,
+              category: book.category,
+              status: book.status,
+              length: int.tryParse(book.length.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0,
+            ),
+          );
+        }
+        id++;
+        await Future<void>.delayed(const Duration(milliseconds: 700));
+      }
+      final merged = found.isEmpty ? index : await index.withEntries(found);
+      if (!mounted) return;
+      setState(() {
+        _index = merged;
+        _busy = false;
+        _hint = found.isEmpty
+            ? '没有发现新书，索引仍是 ${index.entries.length} 本。'
+            : '发现 ${found.length} 本新书，索引现在是 ${merged.entries.length} 本。';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '检查新书失败：$error';
+      });
+    }
+  }
+
   Widget _brandHeader(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
@@ -591,11 +648,16 @@ class _Wenku8PageState extends State<Wenku8Page> {
           ),
           GlassMenuItem(
             order: 2,
+            label: '检查新书',
+            onPressed: () => Navigator.pop(menu, 'probe'),
+          ),
+          GlassMenuItem(
+            order: 3,
             label: '清理下载缓存',
             onPressed: () => Navigator.pop(menu, 'clean'),
           ),
           GlassMenuItem(
-            order: 3,
+            order: 4,
             label: '关于书源',
             onPressed: () => Navigator.pop(menu, 'about'),
           ),
@@ -608,6 +670,8 @@ class _Wenku8PageState extends State<Wenku8Page> {
         await _checkShelfUpdates();
       case 'index':
         await _refreshIndex();
+      case 'probe':
+        await _probeNewBooks();
       case 'clean':
         await _cleanTemporaryFiles();
       case 'about':

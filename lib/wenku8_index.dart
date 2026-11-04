@@ -121,6 +121,40 @@ class Wenku8Index {
     throw const Wenku8IndexUnavailable();
   }
 
+  /// Highest id in the table; new books take the next free id, so the in-app
+  /// probe starts here.
+  int get maxId {
+    var highest = 0;
+    for (final entry in entries) {
+      if (entry.id > highest) highest = entry.id;
+    }
+    return highest;
+  }
+
+  /// Merges freshly probed rows into the on-disk cache so they survive a
+  /// restart, and returns the merged table.
+  ///
+  /// The site answers new titles to the phone but blocks GitHub's runners, so
+  /// the device reports what it found instead of waiting for the weekly job.
+  Future<Wenku8Index> withEntries(Iterable<Wenku8IndexEntry> extra) async {
+    final byId = <int, Wenku8IndexEntry>{for (final entry in entries) entry.id: entry};
+    for (final entry in extra) {
+      byId[entry.id] = entry;
+    }
+    final merged = byId.values.toList()..sort((a, b) => a.id.compareTo(b.id));
+    final raw = jsonEncode([
+      for (final entry in merged)
+        [entry.id, entry.title, entry.author, entry.category, entry.status, entry.length],
+    ]);
+    try {
+      final cache = await cacheFile();
+      await cache.writeAsString(raw, flush: true);
+    } catch (_) {
+      // A read-only cache still lets the session use the merged table.
+    }
+    return Wenku8Index(merged, updated: true);
+  }
+
   static Future<_Loaded?> _readFile(File file) async {
     try {
       return _Loaded.decode(await file.readAsString());
