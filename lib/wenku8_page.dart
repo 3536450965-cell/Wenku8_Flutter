@@ -421,6 +421,131 @@ class _Wenku8PageState extends State<Wenku8Page> {
     setState(() => _hint = '已清理 $removed 个下载临时文件。');
   }
 
+  Widget _brandHeader(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 46,
+            height: 46,
+            color: scheme.inverseSurface,
+            child: Image.asset(
+              'assets/branding/app-icon.png',
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Icon(
+                CupertinoIcons.book_solid,
+                size: 22,
+                color: scheme.onInverseSurface,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '轻小说文库',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  height: 1.15,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                'WENKU8 / READING ARCHIVE',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  letterSpacing: 2.4,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        _RoundAction(
+          icon: CupertinoIcons.search,
+          label: '搜索文库',
+          onPressed: _openSearchSheet,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openSearchSheet() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheet) => Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          bottom: MediaQuery.viewInsetsOf(sheet).bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _input,
+              autofocus: true,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) {
+                Navigator.of(sheet).pop();
+                _search();
+              },
+              decoration: const InputDecoration(
+                labelText: '书名 / 作者 / 编号 / 链接',
+                hintText: '例如 文学少女、野村美月、1234、bdnj',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.of(sheet).pop();
+                _search();
+              },
+              icon: const Icon(Icons.search, size: 18),
+              label: const Text('搜索'),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(sheet).pop();
+                    _refreshIndex();
+                  },
+                  child: const Text('刷新书目索引'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(sheet).pop();
+                    _cleanTemporaryFiles();
+                  },
+                  child: const Text('清理下载缓存'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -435,72 +560,23 @@ class _Wenku8PageState extends State<Wenku8Page> {
     final busy = _busy || _pumping;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('文库书源'),
-        actions: [
-          PopupMenuButton<String>(
-            tooltip: '更多',
-            onSelected: (value) {
-              if (value == 'refresh') {
-                _refreshIndex();
-              } else if (value == 'clean') {
-                _cleanTemporaryFiles();
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'refresh',
-                child: Text('刷新书目索引'),
-              ),
-              PopupMenuItem(
-                value: 'clean',
-                child: Text('清理下载缓存'),
-              ),
-            ],
-          ),
-        ],
-      ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
         children: [
-          Text(
-            '输入书名或作者就能搜到文库里的书，也可以直接填书籍编号/链接'
-            '（wenku8.net/book/1234.htm 里的 1234）。下载只抓匿名可读的正文，'
-            '转成 epub 放进书架。',
-            style: muted,
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _input,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _search(),
-            decoration: const InputDecoration(
-              labelText: '书名 / 作者 / 编号 / 链接',
-              hintText: '例如 文学少女、野村美月、1234、bdnj',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              FilledButton.icon(
-                onPressed: _busy ? null : _search,
-                icon: const Icon(Icons.search, size: 18),
-                label: const Text('搜索'),
+          _brandHeader(context),
+          if (_pumping) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () {
+                  _downloads.cancel();
+                  setState(() {});
+                },
+                child: const Text('取消下载'),
               ),
-              if (_pumping)
-                TextButton(
-                  onPressed: () {
-                    _downloads.cancel();
-                    setState(() {});
-                  },
-                  child: const Text('取消'),
-                ),
-            ],
-          ),
+            ),
+          ],
           if (_busy && !_pumping)
             const Padding(
               padding: EdgeInsets.only(top: 16),
@@ -531,6 +607,26 @@ class _Wenku8PageState extends State<Wenku8Page> {
                   '${job.status == null ? '' : ' — ${job.status}'}',
                   style: muted,
                 ),
+              ),
+          ],
+          if (_downloads.failedBooks.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            for (final item in _downloads.failedBooks.values)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '《${item.book.title}》有 ${item.count} 节没下下来',
+                      style: muted,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => _enqueueBook(item.book),
+                    child: const Text('补下'),
+                  ),
+                ],
               ),
           ],
           if (_error != null) ...[
@@ -704,6 +800,43 @@ class _Wenku8PageState extends State<Wenku8Page> {
   }
 }
 
+class _RoundAction extends StatelessWidget {
+  const _RoundAction({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: scheme.surface,
+        elevation: 2.5,
+        shadowColor: scheme.shadow.withValues(alpha: 0.28),
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: 52,
+            height: 52,
+            child: Icon(icon, size: 22, color: scheme.onSurface),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Wenku8Cover extends StatelessWidget {
   const _Wenku8Cover({required this.url, required this.width});
 
@@ -751,6 +884,10 @@ class Wenku8Downloads extends ChangeNotifier {
 
   final Wenku8Client _client = Wenku8Client();
   final List<_Job> queue = <_Job>[];
+
+  /// Books whose last import had chapters the site refused to hand over, so the
+  /// page can offer a one-tap retry instead of silently shipping a short book.
+  final Map<String, ({Wenku8Book book, int count})> failedBooks = {};
 
   LocalBookStore? books;
   LibraryState? state;
@@ -979,6 +1116,14 @@ class Wenku8Downloads extends ChangeNotifier {
         if (download.skipped.isNotEmpty) '跳过 ${download.skipped.length} 节空章节',
         if (download.failed.isNotEmpty) '${download.failed.length} 节下载失败',
       ];
+      if (download.failed.isEmpty) {
+        failedBooks.remove(job.book.id);
+      } else {
+        failedBooks[job.book.id] = (
+          book: job.book,
+          count: download.failed.length,
+        );
+      }
       job.status = notes.isEmpty
           ? '已导入《${novel.title}》'
           : '已导入《${novel.title}》（${notes.join('，')}）';

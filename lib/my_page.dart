@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+﻿import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'app_interactions.dart';
@@ -14,7 +14,7 @@ import 'pages.dart' show SettingsPage;
 import 'ui_notifiers.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
-import 'wenku_features.dart';
+import 'wenku8_storage_page.dart';
 
 class MyPage extends StatelessWidget {
   const MyPage({
@@ -100,6 +100,18 @@ class MyPage extends StatelessWidget {
                       showHeader: false,
                     ),
                   ),
+                  reduceMotion: state.reduceMotion,
+                ),
+              ),
+              const SizedBox(height: 14),
+              FeatureEntry(
+                key: const ValueKey('my-storage'),
+                title: '存储',
+                subtitle: '下载临时文件与缓存占用',
+                icon: CupertinoIcons.folder,
+                onTap: () => pushNovelPage<void>(
+                  context,
+                  const Wenku8StoragePage(),
                   reduceMotion: state.reduceMotion,
                 ),
               ),

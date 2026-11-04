@@ -74,6 +74,13 @@ Widget _localLibraryHeader(
       const Expanded(
         child: ArchiveMasthead(title: '书架', code: '02 / SHELF'),
       ),
+      if (onOnline != null)
+        GlassIconButton(
+          key: const ValueKey('local-online-source'),
+          icon: CupertinoIcons.globe,
+          label: '轻小说文库',
+          onPressed: onOnline,
+        ),
       GlassMenuAnchor(
         child: Builder(
           builder: (anchor) => GlassIconButton(

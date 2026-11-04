@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
@@ -38,7 +38,6 @@ import 'book_grid_density.dart';
 import 'book_categories.dart';
 import 'bookshelf_scope.dart';
 import 'book_source_badge.dart';
-import 'wenku8_page.dart';
 import 'book_search.dart';
 import 'blocked_tags_controls.dart';
 import 'catalog.dart';
@@ -164,7 +163,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     GlassDockItem(CupertinoIcons.house, '发现'),
     GlassDockItem(CupertinoIcons.book, '书架', symbol: ArchiveSymbol.shelf),
     GlassDockItem(CupertinoIcons.book, '书架', symbol: ArchiveSymbol.shelf),
-    GlassDockItem(CupertinoIcons.square_stack, '书架', symbol: ArchiveSymbol.shelf),
+    GlassDockItem(CupertinoIcons.person, '我的'),
   ];
   late final _catalog = NovelFeedController(
     widget.repository,
@@ -309,13 +308,7 @@ class HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       shelf.buildHeader,
       localPage == null
           ? (_) => const ArchiveMasthead(title: '书架', code: '02 / SHELF')
-          : (context) => Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                localPage.buildHeader(context),
-                if (_localBooks case final books?) Wenku8EntryBar(books: books, state: widget.state),
-              ],
-            ),
+          : localPage.buildHeader,
       settings.buildHeader,
     ];
     _pageWidgets =
