@@ -82,6 +82,16 @@ class Wenku8Index {
 
   /// Loads the table, preferring a fresh disk cache, then the network, and
   /// finally the copy bundled with the app (which works offline).
+  /// Drops the cached copy, fetches the newest index, then falls back to the
+  /// bundled asset so the search box never ends up empty.
+  static Future<Wenku8Index> forceRefresh() async {
+    try {
+      final cache = await cacheFile();
+      if (await cache.exists()) await cache.delete();
+    } catch (_) {}
+    return load();
+  }
+
   static Future<Wenku8Index> load() async {
     final cache = await cacheFile();
     if (await cache.exists()) {

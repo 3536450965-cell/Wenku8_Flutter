@@ -389,6 +389,82 @@ class _Wenku8PageState extends State<Wenku8Page> {
     return result ?? false;
   }
 
+  Future<void> _showEntryActions(Wenku8IndexEntry entry) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(entry.title),
+              subtitle: Text(
+                [
+                  if (entry.author.isNotEmpty) entry.author,
+                  if (entry.category.isNotEmpty) entry.category,
+                  if (entry.length > 0) entry.lengthLabel,
+                ].join(' · '),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.download),
+              title: const Text('下载并导入'),
+              onTap: () => Navigator.of(context).pop('download'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.playlist_add),
+              title: const Text('加入下载队列'),
+              onTap: () => Navigator.of(context).pop('queue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    _enqueueEntry(entry);
+    if (action == 'download' && !_pumping) {
+      _input.text = '${entry.id}';
+      await _openBook('${entry.id}');
+    }
+  }
+
+  Future<void> _refreshIndex() async {
+    setState(() => _busy = true);
+    try {
+      final index = await Wenku8Index.forceRefresh();
+      if (!mounted) return;
+      setState(() {
+        _index = index;
+        _busy = false;
+        _hint = '书目索引已更新，共 ${index.entries.length} 本。';
+        _error = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '刷新索引失败：$error';
+      });
+    }
+  }
+
+  Future<void> _cleanTemporaryFiles() async {
+    var removed = 0;
+    try {
+      final directory = await getTemporaryDirectory();
+      await for (final entity in directory.list()) {
+        final name = entity.path.split(RegExp(r'[\\/]')).last;
+        if (entity is File && (name.endsWith('.epub') || name.startsWith('wenku8-'))) {
+          await entity.delete();
+          removed++;
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _hint = '已清理 $removed 个下载临时文件。');
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -403,7 +479,31 @@ class _Wenku8PageState extends State<Wenku8Page> {
     final busy = _busy || _pumping;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('文库书源')),
+      appBar: AppBar(
+        title: const Text('文库书源'),
+        actions: [
+          PopupMenuButton<String>(
+            tooltip: '更多',
+            onSelected: (value) {
+              if (value == 'refresh') {
+                _refreshIndex();
+              } else if (value == 'clean') {
+                _cleanTemporaryFiles();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'refresh',
+                child: Text('刷新书目索引'),
+              ),
+              PopupMenuItem(
+                value: 'clean',
+                child: Text('清理下载缓存'),
+              ),
+            ],
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
         children: [
@@ -522,6 +622,9 @@ class _Wenku8PageState extends State<Wenku8Page> {
                           _input.text = '${entry.id}';
                           _openBook('${entry.id}');
                         },
+                  onLongPress: busy
+                      ? null
+                      : () => _showEntryActions(entry),
                 );
               },
             ),
@@ -555,6 +658,33 @@ class _Wenku8PageState extends State<Wenku8Page> {
             if (book.summary.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(book.summary, style: muted),
+            ],
+            if (volumes != null && shelf[book.title.toLowerCase()] != null) ...[
+              const SizedBox(height: 12),
+              Builder(
+                builder: (context) {
+                  final local = shelf[book.title.toLowerCase()]!;
+                  final latest = local.chapters == chapters;
+                  return Row(
+                    children: [
+                      Icon(
+                        latest ? Icons.check_circle_outline : Icons.sync,
+                        size: 16,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          latest
+                              ? '书架里已有这本书（${local.chapters} 章，已是最新）'
+                              : '书架里已有 ${local.chapters} 章，在线 $chapters 章，可以更新',
+                          style: muted,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ],
             if (volumes != null) ...[
               const SizedBox(height: 14),
