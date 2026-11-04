@@ -515,11 +515,7 @@ class _Wenku8PageState extends State<Wenku8Page> {
           ),
         ),
         const SizedBox(width: 12),
-        _RoundAction(
-          icon: CupertinoIcons.ellipsis,
-          label: '文库选项',
-          onPressed: () => _openMoreMenu(context),
-        ),
+        _MoreAction(onSelected: _handleMore),
       ],
     );
   }
@@ -556,72 +552,16 @@ class _Wenku8PageState extends State<Wenku8Page> {
     );
   }
 
-  Future<void> _openMoreMenu(BuildContext context) async {
-    final box = context.findRenderObject() as RenderBox?;
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-    final origin = box == null || overlay == null
-        ? null
-        : box.localToGlobal(
-            Offset(box.size.width - 200, box.size.height + 6),
-            ancestor: overlay,
-          );
-    final picked = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        origin?.dx ?? 0,
-        origin?.dy ?? 0,
-        origin == null ? 0 : overlay!.size.width - origin.dx - 200,
-        0,
-      ),
-      items: const [
-        PopupMenuItem(
-          value: 'updates',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(CupertinoIcons.arrow_2_circlepath, size: 19),
-            title: Text('检查书架更新'),
-          ),
-        ),
-        PopupMenuItem(
-          value: 'index',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(CupertinoIcons.refresh, size: 19),
-            title: Text('刷新书目索引'),
-          ),
-        ),
-        PopupMenuItem(
-          value: 'clean',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(CupertinoIcons.trash, size: 19),
-            title: Text('清理下载缓存'),
-          ),
-        ),
-        PopupMenuItem(
-          value: 'about',
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(CupertinoIcons.info_circle, size: 19),
-            title: Text('关于书源'),
-          ),
-        ),
-      ],
-    );
-    if (!mounted || picked == null) return;
+  void _handleMore(String picked) {
     switch (picked) {
       case 'updates':
-        await _checkShelfUpdates();
+        _checkShelfUpdates();
       case 'index':
-        await _refreshIndex();
+        _refreshIndex();
       case 'clean':
-        await _cleanTemporaryFiles();
+        _cleanTemporaryFiles();
       case 'about':
-        await _showAbout();
+        _showAbout();
     }
   }
 
@@ -947,43 +887,6 @@ class _Wenku8PageState extends State<Wenku8Page> {
   }
 }
 
-class _RoundAction extends StatelessWidget {
-  const _RoundAction({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Semantics(
-      button: true,
-      label: label,
-      child: Material(
-        color: scheme.surface,
-        elevation: 2.5,
-        shadowColor: scheme.shadow.withValues(alpha: 0.28),
-        shape: const CircleBorder(),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onPressed,
-          customBorder: const CircleBorder(),
-          child: SizedBox(
-            width: 52,
-            height: 52,
-            child: Icon(icon, size: 22, color: scheme.onSurface),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _Wenku8Cover extends StatelessWidget {
   const _Wenku8Cover({required this.url, required this.width});
 
@@ -1279,5 +1182,76 @@ class Wenku8Downloads extends ChangeNotifier {
       job.status = '$error';
       notifyListeners();
     }
+  }
+}
+
+class _MoreAction extends StatelessWidget {
+  const _MoreAction({required this.onSelected});
+
+  final ValueChanged<String> onSelected;
+
+  static const _items = <PopupMenuEntry<String>>[
+    PopupMenuItem(
+      value: 'updates',
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(CupertinoIcons.arrow_2_circlepath, size: 19),
+        title: Text('检查书架更新'),
+      ),
+    ),
+    PopupMenuItem(
+      value: 'index',
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(CupertinoIcons.refresh, size: 19),
+        title: Text('刷新书目索引'),
+      ),
+    ),
+    PopupMenuItem(
+      value: 'clean',
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(CupertinoIcons.trash, size: 19),
+        title: Text('清理下载缓存'),
+      ),
+    ),
+    PopupMenuItem(
+      value: 'about',
+      child: ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(CupertinoIcons.info_circle, size: 19),
+        title: Text('关于书源'),
+      ),
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface,
+      shape: const CircleBorder(),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: 44,
+        height: 44,
+        child: PopupMenuButton<String>(
+          tooltip: '文库选项',
+          padding: EdgeInsets.zero,
+          iconSize: 20,
+          icon: Icon(
+            CupertinoIcons.ellipsis,
+            size: 20,
+            color: scheme.onSurface,
+          ),
+          onSelected: onSelected,
+          itemBuilder: (_) => _items,
+        ),
+      ),
+    );
   }
 }
