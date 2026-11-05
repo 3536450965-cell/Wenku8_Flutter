@@ -63,6 +63,9 @@ internal class BookArchiveImport(private val root: File) {
     fun prepare(name: String, source: BookDocumentInput): Any =
         throw IllegalStateException("这个构建不支持转换 $name。")
 
+    fun prepare(name: String, source: File): Any =
+        throw IllegalStateException("这个构建不支持转换 $name。")
+
     companion object {
         const val MAX_ARCHIVE: Long = 512L * 1024 * 1024
 
