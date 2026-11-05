@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
@@ -3045,7 +3045,7 @@ class SettingsPage extends StatelessWidget {
             context,
             id: 'usage',
             title: '使用方式',
-            subtitle: '启动与续读、书架及离线适配',
+            subtitle: '启动与续读',
             code: 'SYSTEM / USAGE',
             icon: CupertinoIcons.square_grid_2x2,
             options: _usageOptions,
@@ -3086,19 +3086,6 @@ class SettingsPage extends StatelessWidget {
             ),
             const SizedBox(height: 14),
           ],
-          FeatureEntry(
-            key: const ValueKey('settings-reading-widgets'),
-            title: '小组件',
-            subtitle: '配置桌面上的阅读主题与隐私',
-            icon: CupertinoIcons.square_grid_2x2,
-            onTap: () => pushNovelPage<void>(
-              context,
-              ReadingWidgetSettingsPage(state: state),
-              reduceMotion: state.reduceMotion,
-              slot: ('settings', 'reading-widgets'),
-            ),
-          ),
-          const SizedBox(height: 14),
           _sectionEntry(
             context,
             id: 'data',
@@ -3204,17 +3191,6 @@ class SettingsPage extends StatelessWidget {
               ),
             ),
           const Divider(height: 22),
-          GlassSettingMenu<AppStartPage>(
-            key: const ValueKey('settings-start-page'),
-            icon: CupertinoIcons.house,
-            label: '启动页面',
-            value: state.startPage,
-            options: {for (final page in AppStartPage.values) page: page.label},
-            reduceMotion: state.reduceMotion,
-            onChanged: (page) =>
-                _savePreference(context, () => state.setStartPage(page)),
-          ),
-          const Divider(height: 22),
           _toggleSetting(
             context,
             keyName: 'settings-open-recent-on-launch',
@@ -3223,40 +3199,6 @@ class SettingsPage extends StatelessWidget {
             description: '打开应用后进入最近读过的书',
             value: state.openRecentOnLaunch,
             onChanged: state.setOpenRecentOnLaunch,
-          ),
-          const Divider(height: 22),
-          _toggleSetting(
-            context,
-            keyName: 'settings-combined-shelf',
-            icon: CupertinoIcons.square_stack,
-            title: '合并书架',
-            description: '收藏与本地书统一显示在书架，试读缓存不加入',
-            value: state.combinedShelf,
-            onChanged: (value) => state.setNavigationMode(combinedShelf: value),
-          ),
-          const Divider(height: 22),
-          _toggleSetting(
-            context,
-            keyName: 'settings-adapt-offline',
-            icon: CupertinoIcons.wifi_slash,
-            title: '离线适配',
-            description: state.combinedShelf
-                ? '断网后隐藏发现，书架保留已缓存的收藏和本地书籍'
-                : '断网后隐藏发现，书架只显示已缓存的收藏',
-            value: state.adaptWhenOffline,
-            onChanged: (value) =>
-                state.setNavigationMode(adaptWhenOffline: value),
-          ),
-          const Divider(height: 22),
-          _toggleSetting(
-            context,
-            keyName: 'settings-local-reader-mode',
-            icon: CupertinoIcons.book,
-            title: '阅读器模式',
-            description: state.combinedShelf ? '只显示离线可读的合并书架和我的' : '只显示本地和我的',
-            value: state.localReaderMode,
-            onChanged: (value) =>
-                state.setNavigationMode(localReaderMode: value),
           ),
         ],
       ),
